@@ -1,0 +1,3 @@
+# GRU ARMCM7 SP RTE
+
+CMSIS-NN GRU 示例 ARMCM7 SP 运行时目录。

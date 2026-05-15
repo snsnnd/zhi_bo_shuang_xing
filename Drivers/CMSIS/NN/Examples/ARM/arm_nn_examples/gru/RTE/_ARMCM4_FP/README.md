@@ -1,0 +1,3 @@
+# GRU ARMCM4 FP RTE
+
+CMSIS-NN GRU 示例 ARMCM4 FP 运行时目录。

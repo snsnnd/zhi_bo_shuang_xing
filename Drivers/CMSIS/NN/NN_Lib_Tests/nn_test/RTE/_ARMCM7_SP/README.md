@@ -1,0 +1,3 @@
+# NN Test ARMCM7 SP RTE
+
+CMSIS-NN 测试 ARMCM7 SP 运行时目录。

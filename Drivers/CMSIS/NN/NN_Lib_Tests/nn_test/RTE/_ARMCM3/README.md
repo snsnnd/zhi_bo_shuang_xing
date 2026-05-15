@@ -1,0 +1,3 @@
+# NN Test ARMCM3 RTE
+
+CMSIS-NN 测试 ARMCM3 运行时目录。

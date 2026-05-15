@@ -1,0 +1,21 @@
+# Keil build outputs
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+MDK-ARM/RTE/
+*.axf
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.d
+
+# Local/editor files
+.vscode/
+.idea/
+*.swp
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db

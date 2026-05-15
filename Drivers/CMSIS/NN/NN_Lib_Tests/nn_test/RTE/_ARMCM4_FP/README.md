@@ -1,0 +1,3 @@
+# NN Test ARMCM4 FP RTE
+
+CMSIS-NN 测试 ARMCM4 FP 运行时目录。

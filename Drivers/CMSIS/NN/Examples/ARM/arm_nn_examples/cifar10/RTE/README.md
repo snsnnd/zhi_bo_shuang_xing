@@ -1,0 +1,3 @@
+# CIFAR10 RTE
+
+CMSIS-NN CIFAR10 示例运行时环境目录。

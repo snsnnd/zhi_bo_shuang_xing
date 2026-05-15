@@ -1,0 +1,3 @@
+# GRU ARMCM3 RTE
+
+CMSIS-NN GRU 示例 ARMCM3 运行时目录。
