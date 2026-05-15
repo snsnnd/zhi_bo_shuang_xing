@@ -6,8 +6,10 @@ static line_raw_t g_filt;
 static float g_err_filt;
 static bool g_inited;
 
+// 一阶低通滤波：a 越大响应越快，a 越小平滑越强
 static float lpf(float prev, float in, float a) { return prev + a * (in - prev); }
 
+// 写入原始循迹值，并进行轻度低通滤波
 void bsp_line_set_raw(line_raw_t raw) {
     g_raw = raw;
     if (!g_inited) {
@@ -34,6 +36,7 @@ line_bin_t bsp_line_get_bin(void) {
     return b;
 }
 
+// 计算加权误差，并对误差再做一次轻滤波降低 PID 抖动
 float bsp_line_get_error(void) {
     line_bin_t b = bsp_line_get_bin();
     float sum = 0.0f, cnt = 0.0f;

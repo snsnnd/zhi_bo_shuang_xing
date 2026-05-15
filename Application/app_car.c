@@ -26,6 +26,7 @@ static float clampf(float x, float lo, float hi) {
     return x;
 }
 
+// 整车初始化：初始化控制器、IMU、策略与地图学习/加载状态
 void app_car_init(void) {
     line_pid_init(&g_line_pid, 120.0f, 0.0f, 25.0f, CAR_CTRL_DT_S, -350.0f, 350.0f);
     speed_pid_init(&g_lspd_pid, 500.0f, 50.0f, 0.0f, CAR_CTRL_DT_S, 0.0f, CAR_MAX_PWM);
@@ -44,6 +45,7 @@ void app_car_init(void) {
     g_tick_ms = 0U;
 }
 
+// 10ms 主控制循环：采样->策略->控制->执行->显示
 void app_car_run_10ms(void) {
     g_tick_ms += 10U;
     line_raw_t line_raw = bsp_line_get_raw();
@@ -52,6 +54,7 @@ void app_car_run_10ms(void) {
     imu_state_t imu = bsp_imu_get_state();
     encoder_state_t enc = bsp_encoder_get_state();
 
+    // 第一圈学习阶段：持续识别事件并在结束后写入 Flash
     if (!g_learning_done) {
         (void)track_map_learning_step(&g_learn_ctx, enc.distance_m, imu.yaw_deg, line_err, line_bin, false);
         if (enc.distance_m > 5.0f) {

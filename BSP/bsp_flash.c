@@ -7,6 +7,7 @@
 static uint8_t g_mock_flash[MOCK_FLASH_SIZE];
 static bool g_init;
 
+// 初始化 mock Flash：默认擦除态 0xFF
 static void ensure_init(void) {
     if (!g_init) {
         memset(g_mock_flash, 0xFF, sizeof(g_mock_flash));
@@ -14,6 +15,7 @@ static void ensure_init(void) {
     }
 }
 
+// 模拟 Flash 读取
 bool bsp_flash_read(uint32_t addr, void *buf, uint32_t len) {
     ensure_init();
     if (addr < MOCK_FLASH_BASE) return false;
@@ -23,6 +25,7 @@ bool bsp_flash_read(uint32_t addr, void *buf, uint32_t len) {
     return true;
 }
 
+// 模拟 Flash 写入（真实硬件需先擦后写）
 bool bsp_flash_write(uint32_t addr, const void *buf, uint32_t len) {
     ensure_init();
     if (addr < MOCK_FLASH_BASE) return false;
@@ -32,6 +35,7 @@ bool bsp_flash_write(uint32_t addr, const void *buf, uint32_t len) {
     return true;
 }
 
+// 模拟页擦除
 bool bsp_flash_erase_page(uint32_t page_addr) {
     ensure_init();
     if (page_addr != MOCK_FLASH_BASE) return false;

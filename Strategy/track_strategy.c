@@ -13,6 +13,7 @@ void track_strategy_init(void) {
 
 static bool line_lost(line_bin_t b) { return !b.l2 && !b.l1 && !b.r1 && !b.r2; }
 
+// 策略决策：处理丢线、急弯、预测等模式并输出目标速度/转向限幅
 strategy_output_t track_strategy_step(float line_error, line_bin_t bin, imu_state_t imu, encoder_state_t enc, uint32_t tick_ms, const map_event_t *current_event) {
     (void)enc;
     strategy_output_t out = { .mode = CAR_MODE_TRACKING, .target_speed_mps = SPEED_MID_MPS, .steer_limit = 350.0f, .lost_timeout = false };

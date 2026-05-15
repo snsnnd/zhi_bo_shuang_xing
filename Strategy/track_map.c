@@ -18,6 +18,7 @@ typedef struct {
 static map_event_t g_events[MAP_MAX_EVENTS];
 static uint16_t g_count;
 
+// 简单校验和，用于检查 Flash 数据完整性
 static uint32_t checksum32(const uint8_t *p, uint32_t n) {
     uint32_t c = 0;
     for (uint32_t i = 0; i < n; ++i) c = (c << 5) - c + p[i];
@@ -50,6 +51,7 @@ const map_event_t *track_map_find_next(float distance_m) {
 uint16_t track_map_count(void) { return g_count; }
 const map_event_t *track_map_events_data(void) { return g_events; }
 
+// 将学习到的事件表序列化并保存到 Flash
 bool track_map_save_to_flash(void) {
     map_flash_blob_t b;
     b.magic = MAP_FLASH_MAGIC;
@@ -61,6 +63,7 @@ bool track_map_save_to_flash(void) {
     return bsp_flash_erase_page(MAP_FLASH_ADDR) && bsp_flash_write(MAP_FLASH_ADDR, &b, (uint32_t)sizeof(b));
 }
 
+// 从 Flash 读取事件表，并进行 magic/version/count/checksum 校验
 bool track_map_load_from_flash(void) {
     map_flash_blob_t b;
     if (!bsp_flash_read(MAP_FLASH_ADDR, &b, (uint32_t)sizeof(b))) return false;
@@ -98,6 +101,7 @@ void track_map_learning_init(map_learning_ctx_t *ctx, float start_dist, float ya
     ctx->err_sign_flips = 0U;
 }
 
+// 学习状态机步进：识别路段类型变化并自动打点
 bool track_map_learning_step(map_learning_ctx_t *ctx, float distance_m, float yaw_deg, float line_err, line_bin_t bin, bool force_finalize) {
     float yaw_delta = yaw_deg - ctx->yaw_start_deg;
     if ((line_err > 0.0f && ctx->prev_err < 0.0f) || (line_err < 0.0f && ctx->prev_err > 0.0f)) ctx->err_sign_flips++;

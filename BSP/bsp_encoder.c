@@ -6,6 +6,7 @@ static bool g_inited;
 
 static float lpf(float prev, float in, float a) { return prev + a * (in - prev); }
 
+// 更新编码器状态：速度低通，累计距离直通（避免地图定位滞后）
 void bsp_encoder_set_state(float left_speed_mps, float right_speed_mps, float distance_m) {
     if (!g_inited) {
         g_enc.left_speed_mps = left_speed_mps;

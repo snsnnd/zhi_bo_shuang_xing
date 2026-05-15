@@ -7,6 +7,7 @@ static float g_dt = 0.01f;
 static float lpf(float prev, float in, float a) { return prev + a * (in - prev); }
 static float absf(float x) { return x < 0.0f ? -x : x; }
 
+// IMU 初始化：清空姿态与角速度状态
 void bsp_imu_init(float dt_s) {
     g_dt = dt_s;
     g_imu.yaw_deg = 0.0f;
@@ -16,6 +17,7 @@ void bsp_imu_init(float dt_s) {
     g_imu.roll_deg = 0.0f;
 }
 
+// IMU 更新：gyro 低通后积分 yaw，pitch/roll 走互补通道
 void bsp_imu_update(float gyro_z_raw_dps, float acc_x_g, float acc_y_g) {
     g_imu.gyro_z_dps = gyro_z_raw_dps;
     g_imu.yaw_rate_filtered = lpf(g_imu.yaw_rate_filtered, gyro_z_raw_dps, IMU_GYRO_LPF_ALPHA);
@@ -26,6 +28,7 @@ void bsp_imu_update(float gyro_z_raw_dps, float acc_x_g, float acc_y_g) {
     g_imu.pitch_deg = IMU_COMP_ALPHA * g_imu.pitch_deg + (1.0f - IMU_COMP_ALPHA) * pitch_acc_deg;
     g_imu.roll_deg = IMU_COMP_ALPHA * g_imu.roll_deg + (1.0f - IMU_COMP_ALPHA) * roll_acc_deg;
 
+    // 当车辆近似直行且姿态接近平稳时，对 yaw 漂移做微弱慢修正
     if (absf(g_imu.yaw_rate_filtered) < YAW_DRIFT_FIX_RATE_TH_DPS && absf(g_imu.pitch_deg) < YAW_DRIFT_FIX_TILT_TH_DEG && absf(g_imu.roll_deg) < YAW_DRIFT_FIX_TILT_TH_DEG) {
         g_imu.yaw_deg *= YAW_DRIFT_DECAY_WHEN_STRAIGHT;
     }
