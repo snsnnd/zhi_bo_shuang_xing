@@ -5,7 +5,7 @@
 ## 项目结构
 
 - `Application/`：整车 10 ms 主控制循环，串联采样、学习、定位、策略、PID、电机输出和 OLED 调试。
-- `BSP/`：板级抽象层，封装循迹、编码器、IMU、电机、OLED、Flash 等硬件接口，目前部分实现是便于联调的 mock。
+- `BSP/`：板级抽象层，封装循迹、编码器、IMU、电机、OLED、Flash 等真实硬件接口。
 - `Common/`：全局类型和标定参数。
 - `Control/`：循迹 PID 和左右轮速度 PID。
 - `Strategy/`：地图学习、Flash 持久化和赛道策略决策。
@@ -16,7 +16,7 @@
 ## 核心流程
 
 1. `app_car_init()` 初始化 PID、IMU、策略模块，并优先从 Flash 读取已学习地图。
-2. `app_car_run_10ms()` 每 10 ms 执行一次控制周期。
+2. `main.c` 使用 `HAL_GetTick()` 对 `app_car_run_10ms()` 做 10 ms 节拍调度。
 3. 第一圈未学习完成时，`track_map_learning_step()` 根据里程、yaw、循迹误差和外侧传感器自动生成路段事件。
 4. 学习完成后通过 `track_map_save_to_flash()` 保存地图，上电后可直接加载进入循迹。
 5. `track_strategy_step()` 根据当前路段、丢线状态和直道判断输出目标速度与转向限幅。
@@ -49,6 +49,16 @@
 | PB14 | GPIO_Output | 电机方向/控制输出 3 |
 | PB15 | GPIO_Output | 电机方向/控制输出 4 |
 
+## BSP 硬件实现
+
+- 循迹：`BSP/bsp_line.c` 直接读取 PA4-PA7，默认高电平为检测到线，可通过 `LINE_SENSOR_ACTIVE_LEVEL` 修改。
+- 编码器：`BSP/bsp_encoder.c` 启动 TIM2/TIM3 编码器模式，通过计数差计算速度和里程。
+- 电机：`BSP/bsp_motor.c` 启动 TIM4 CH3/CH4 PWM，并用 PB12-PB15 控制左右轮方向。
+- IMU：`BSP/bsp_imu.c` 通过 I2C2 初始化和读取 MPU6050，积分补偿后的 gyro_z 得到 yaw。
+- IMU 零漂：上电初始化时车辆需要静止，系统会采样 `MPU6050_GYRO_CALIB_SAMPLES` 次估算 gyro_z 零偏，再叠加手动偏置补偿 yaw 积分漂移。
+- OLED：`BSP/bsp_oled.c` 通过 I2C2 驱动 SSD1306 兼容 128x64 屏，刷新限频到 10 Hz，避免阻塞控制周期。
+- Flash：`BSP/bsp_flash.c` 使用 STM32F1 内部 Flash 半字编程，在 `FLASH_MAP_ADDR` 起始的 2KB 区域保存地图。
+
 ## 关键参数
 
 所有核心控制参数集中在 `Common/car_config.h`：
@@ -62,6 +72,20 @@
 - `ENC_SPD_LPF_ALPHA`：编码器速度低通滤波系数。
 - `IMU_GYRO_LPF_ALPHA`、`IMU_COMP_ALPHA`：IMU gyro/yaw 和 pitch/roll 滤波系数。
 - `YAW_DRIFT_FIX_*`：直行近水平时的 yaw 慢漂移修正阈值。
+- `ENCODER_COUNTS_PER_REV`、`WHEEL_DIAMETER_M`：编码器和车轮标定参数。
+- `MPU6050_GYRO_Z_OFFSET_DPS`：陀螺仪 Z 轴零偏。
+- `MPU6050_GYRO_CALIB_SAMPLES`、`MPU6050_GYRO_CALIB_DELAY_MS`：上电 gyro_z 自动零漂校准采样参数。
+- `FLASH_MAP_ADDR`、`FLASH_MAP_SIZE_BYTES`：地图持久化 Flash 区域。
+
+## 中断策略
+
+当前工程建议先保持主循环 10 ms 调度，不把整车控制逻辑放进中断。
+
+- 必须保留 SysTick 中断：HAL 依赖 SysTick 维护 `HAL_GetTick()`，当前 10 ms 调度也依赖它。
+- 暂不需要编码器中断：TIM2/TIM3 硬件计数器可在 10 ms 周期内读取差值，CPU 开销小且更稳定。
+- 暂不需要循迹 GPIO 中断：循迹是连续采样信号，周期轮询比边沿中断更适合做滤波和 PID。
+- 暂不建议在中断里跑 `app_car_run_10ms()`：其中包含 I2C OLED/IMU、Flash、PID 和策略逻辑，放进 ISR 会造成阻塞和优先级问题。
+- 后续如需更稳定周期，可新增一个基础定时器中断只置位 `g_ctrl_10ms_flag`，主循环看到标志后再执行 `app_car_run_10ms()`。
 
 ## CubeMX 生成文件说明
 
@@ -75,10 +99,11 @@
 
 业务逻辑建议放在 `Application/`、`BSP/`、`Common/`、`Control/`、`Strategy/`。如必须修改 CubeMX 生成文件，应优先写在 `USER CODE BEGIN/END` 区域内。
 
-## 移植到实车注意事项
+## 实车注意事项
 
-- `BSP/bsp_flash.c` 当前是 RAM mock，需要替换为 STM32 Flash 擦写实现。
-- `BSP/bsp_oled.c` 当前用 `printf` 模拟显示，需要替换为 SSD1306 或实际 OLED 驱动。
-- `BSP/bsp_motor.c` 当前只缓存命令，需要接入 TIM4 PWM 和 PB12-PB15 方向控制。
-- `BSP/bsp_line.c` 当前由 `bsp_line_set_raw()` 注入归一化数据，实车需要接入 GPIO/ADC 采样。
-- `BSP/bsp_imu.c` 当前接口接收已换算的 gyro/acc 数据，实车需要在 I2C2 上读取 MPU6050 等 IMU。
+- `FLASH_MAP_ADDR=0x0800F800` 会占用 STM32F103C8 Flash 末尾 2KB，固件链接大小必须避开该区域。
+- `ENCODER_COUNTS_PER_REV` 需要按编码器线数、倍频方式和减速比重新标定。
+- `WHEEL_DIAMETER_M` 需要按实车轮径测量值修正。
+- 上电零漂校准期间车辆必须静止，否则 yaw 会带入错误偏置。
+- 如果电机方向反了，优先调整电机接线或 `bsp_motor.c` 中 PB12-PB15 的方向映射。
+- 如果循迹黑白逻辑反了，修改 `LINE_SENSOR_ACTIVE_LEVEL`。

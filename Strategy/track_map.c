@@ -2,7 +2,7 @@
 #include "../BSP/bsp_flash.h"
 #include "../Common/car_config.h"
 
-#define MAP_FLASH_ADDR 0x0801F800u
+#define MAP_FLASH_ADDR FLASH_MAP_ADDR
 #define MAP_FLASH_MAGIC 0x4D415031u
 #define MAP_FLASH_VER 1u
 

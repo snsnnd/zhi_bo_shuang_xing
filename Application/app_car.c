@@ -117,8 +117,8 @@ void app_car_run_10ms(void) {
 
     // 3) 模式特化控制
     if (g_mode == CAR_MODE_LOST) {
-        // 丢线模式：按误差方向做低速搜索（左右轮小差速）
-        float search = (line_err > 0.0f ? 1.0f : -1.0f);
+        // 丢线模式：按最后一次有效误差方向搜索，避免 99.0f 无效误差固定偏向一侧。
+        float search = (so.search_error > 0.0f ? 1.0f : -1.0f);
         left_target = SPEED_LOW_MPS - 0.08f * search;
         right_target = SPEED_LOW_MPS + 0.08f * search;
     } else if (g_mode == CAR_MODE_PROTECT) {

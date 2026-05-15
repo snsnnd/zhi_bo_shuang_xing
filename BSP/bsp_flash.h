@@ -6,8 +6,8 @@
 
 /*
  * Flash persistence abstraction used by the learned track map.
- * The C file currently provides a RAM-backed mock; on hardware this should be
- * replaced with STM32 page erase/program/read operations at the same API level.
+ * The implementation uses STM32F1 internal Flash half-word programming and a
+ * reserved map area configured in Common/car_config.h.
  */
 bool bsp_flash_read(uint32_t addr, void *buf, uint32_t len);
 bool bsp_flash_write(uint32_t addr, const void *buf, uint32_t len);

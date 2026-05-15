@@ -41,4 +41,17 @@
 #define YAW_DRIFT_FIX_TILT_TH_DEG     (8.0f)
 #define YAW_DRIFT_DECAY_WHEN_STRAIGHT (0.9995f)
 
+/* Hardware calibration values. */
+#define LINE_SENSOR_ACTIVE_LEVEL      (1U)
+#define ENCODER_COUNTS_PER_REV        (1560.0f)
+#define WHEEL_DIAMETER_M              (0.065f)
+#define MPU6050_I2C_ADDR              (0x68U << 1)
+/* Keep the car still at power-on; these samples estimate gyro_z zero drift. */
+#define MPU6050_GYRO_CALIB_SAMPLES    (100U)
+#define MPU6050_GYRO_CALIB_DELAY_MS   (2U)
+#define MPU6050_GYRO_Z_OFFSET_DPS     (0.0f)
+#define OLED_I2C_ADDR                 (0x3CU << 1)
+#define FLASH_MAP_ADDR                (0x0800F800U)
+#define FLASH_MAP_SIZE_BYTES          (2048U)
+
 #endif

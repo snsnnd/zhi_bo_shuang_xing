@@ -9,6 +9,7 @@ typedef struct {
     car_mode_t mode;
     float target_speed_mps;
     float steer_limit;
+    float search_error;
     bool lost_timeout;
 } strategy_output_t;
 

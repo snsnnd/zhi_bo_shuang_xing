@@ -21,7 +21,7 @@ typedef struct {
     float current_limit_speed;
 } oled_runtime_t;
 
-/* OLED debug display abstraction. */
+/* OLED debug display abstraction; hardware refresh is internally throttled. */
 void bsp_oled_set_page(uint8_t page);
 void bsp_oled_show_runtime(car_mode_t mode, const oled_runtime_t *rt);
 

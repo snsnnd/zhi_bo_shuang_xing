@@ -1,44 +1,51 @@
 #include "bsp_flash.h"
+#include "../Common/car_config.h"
+#include "main.h"
 #include <string.h>
 
-#define MOCK_FLASH_BASE 0x0801F800u
-#define MOCK_FLASH_SIZE 2048u
-
-static uint8_t g_mock_flash[MOCK_FLASH_SIZE];
-static bool g_init;
-
-// 初始化 mock Flash：默认擦除态 0xFF
-static void ensure_init(void) {
-    if (!g_init) {
-        memset(g_mock_flash, 0xFF, sizeof(g_mock_flash));
-        g_init = true;
-    }
+static bool in_map_area(uint32_t addr, uint32_t len) {
+    return addr >= FLASH_MAP_ADDR && (addr + len) <= (FLASH_MAP_ADDR + FLASH_MAP_SIZE_BYTES);
 }
 
-// 模拟 Flash 读取
+// 从 MCU 内部 Flash 读取地图数据。
 bool bsp_flash_read(uint32_t addr, void *buf, uint32_t len) {
-    ensure_init();
-    if (addr < MOCK_FLASH_BASE) return false;
-    uint32_t off = addr - MOCK_FLASH_BASE;
-    if ((off + len) > MOCK_FLASH_SIZE) return false;
-    memcpy(buf, &g_mock_flash[off], len);
+    if (!buf || !in_map_area(addr, len)) return false;
+    memcpy(buf, (const void *)addr, len);
     return true;
 }
 
-// 模拟 Flash 写入（真实硬件需先擦后写）
+// STM32F1 Flash 按半字编程，调用方必须先擦除目标页。
 bool bsp_flash_write(uint32_t addr, const void *buf, uint32_t len) {
-    ensure_init();
-    if (addr < MOCK_FLASH_BASE) return false;
-    uint32_t off = addr - MOCK_FLASH_BASE;
-    if ((off + len) > MOCK_FLASH_SIZE) return false;
-    memcpy(&g_mock_flash[off], buf, len);
-    return true;
+    if (!buf || !in_map_area(addr, len)) return false;
+    const uint8_t *p = (const uint8_t *)buf;
+    bool ok = true;
+
+    HAL_FLASH_Unlock();
+    for (uint32_t i = 0; i < len; i += 2U) {
+        uint16_t half = p[i];
+        if ((i + 1U) < len) half |= (uint16_t)p[i + 1U] << 8;
+        else half |= 0xFF00U;
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr + i, half) != HAL_OK) {
+            ok = false;
+            break;
+        }
+    }
+    HAL_FLASH_Lock();
+    return ok;
 }
 
-// 模拟页擦除
+// 擦除地图存储区域；STM32F103C8 每页 1KB，这里擦除连续 2 页。
 bool bsp_flash_erase_page(uint32_t page_addr) {
-    ensure_init();
-    if (page_addr != MOCK_FLASH_BASE) return false;
-    memset(g_mock_flash, 0xFF, sizeof(g_mock_flash));
-    return true;
+    if (page_addr != FLASH_MAP_ADDR) return false;
+
+    FLASH_EraseInitTypeDef erase;
+    uint32_t page_error = 0U;
+    erase.TypeErase = FLASH_TYPEERASE_PAGES;
+    erase.PageAddress = FLASH_MAP_ADDR;
+    erase.NbPages = FLASH_MAP_SIZE_BYTES / 1024U;
+
+    HAL_FLASH_Unlock();
+    HAL_StatusTypeDef st = HAL_FLASHEx_Erase(&erase, &page_error);
+    HAL_FLASH_Lock();
+    return st == HAL_OK;
 }

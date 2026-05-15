@@ -1,11 +1,62 @@
 #include "bsp_imu.h"
 #include "../Common/car_config.h"
+#include "i2c.h"
 
 static imu_state_t g_imu;
 static float g_dt = 0.01f;
+static float g_gyro_z_bias_dps;
+static uint32_t g_prev_tick;
+static bool g_mpu_ready;
 
 static float lpf(float prev, float in, float a) { return prev + a * (in - prev); }
 static float absf(float x) { return x < 0.0f ? -x : x; }
+static int16_t be16(const uint8_t *p) { return (int16_t)(((uint16_t)p[0] << 8) | p[1]); }
+
+static bool mpu_write(uint8_t reg, uint8_t val) {
+    return HAL_I2C_Mem_Write(&hi2c2, MPU6050_I2C_ADDR, reg, I2C_MEMADD_SIZE_8BIT, &val, 1U, 10U) == HAL_OK;
+}
+
+static bool mpu_read(uint8_t reg, uint8_t *buf, uint16_t len) {
+    return HAL_I2C_Mem_Read(&hi2c2, MPU6050_I2C_ADDR, reg, I2C_MEMADD_SIZE_8BIT, buf, len, 10U) == HAL_OK;
+}
+
+static bool read_mpu_raw(int16_t *acc_x, int16_t *acc_y, int16_t *gyro_z) {
+    uint8_t buf[14];
+    if (!mpu_read(0x3BU, buf, sizeof(buf))) return false;
+    *acc_x = be16(&buf[0]);
+    *acc_y = be16(&buf[2]);
+    *gyro_z = be16(&buf[12]);
+    return true;
+}
+
+static void calibrate_gyro_z(void) {
+    int32_t sum = 0;
+    uint16_t ok_count = 0U;
+
+    // 上电零漂校准要求车辆静止；失败时保留手动偏置，系统仍可运行。
+    for (uint16_t i = 0U; i < MPU6050_GYRO_CALIB_SAMPLES; ++i) {
+        int16_t ax, ay, gz;
+        if (read_mpu_raw(&ax, &ay, &gz)) {
+            (void)ax;
+            (void)ay;
+            sum += gz;
+            ok_count++;
+        }
+        HAL_Delay(MPU6050_GYRO_CALIB_DELAY_MS);
+    }
+
+    if (ok_count > 0U) {
+        g_gyro_z_bias_dps = ((float)sum / (float)ok_count) / 131.0f;
+    }
+}
+
+static void ensure_mpu_ready(void) {
+    if (!g_mpu_ready) {
+        g_mpu_ready = mpu_write(0x6BU, 0x00U) && mpu_write(0x1BU, 0x00U) && mpu_write(0x1CU, 0x00U);
+        if (g_mpu_ready) calibrate_gyro_z();
+        g_prev_tick = HAL_GetTick();
+    }
+}
 
 // IMU 初始化：清空姿态与角速度状态
 void bsp_imu_init(float dt_s) {
@@ -15,6 +66,10 @@ void bsp_imu_init(float dt_s) {
     g_imu.yaw_rate_filtered = 0.0f;
     g_imu.pitch_deg = 0.0f;
     g_imu.roll_deg = 0.0f;
+    g_gyro_z_bias_dps = MPU6050_GYRO_Z_OFFSET_DPS;
+    g_prev_tick = HAL_GetTick();
+    g_mpu_ready = false;
+    ensure_mpu_ready();
 }
 
 // IMU 更新：gyro 低通后积分 yaw，pitch/roll 走互补通道
@@ -36,5 +91,22 @@ void bsp_imu_update(float gyro_z_raw_dps, float acc_x_g, float acc_y_g) {
     }
 }
 
-imu_state_t bsp_imu_get_state(void) { return g_imu; }
+imu_state_t bsp_imu_get_state(void) {
+    ensure_mpu_ready();
+    if (g_mpu_ready) {
+        uint32_t now = HAL_GetTick();
+        uint32_t dt_ms = now - g_prev_tick;
+        if (dt_ms > 0U) {
+            int16_t ax, ay, gz;
+            if (read_mpu_raw(&ax, &ay, &gz)) {
+                g_dt = (float)dt_ms * 0.001f;
+                bsp_imu_update(((float)gz / 131.0f) - g_gyro_z_bias_dps,
+                               (float)ax / 16384.0f,
+                               (float)ay / 16384.0f);
+            }
+            g_prev_tick = now;
+        }
+    }
+    return g_imu;
+}
 void bsp_imu_zero_yaw(void) { g_imu.yaw_deg = 0.0f; }

@@ -18,7 +18,7 @@ static bool line_lost(line_bin_t b) { return !b.l2 && !b.l1 && !b.r1 && !b.r2; }
 // 策略决策：处理丢线、急弯、预测等模式并输出目标速度/转向限幅
 strategy_output_t track_strategy_step(float line_error, line_bin_t bin, imu_state_t imu, encoder_state_t enc, uint32_t tick_ms, const map_event_t *current_event) {
     (void)enc;
-    strategy_output_t out = { .mode = CAR_MODE_TRACKING, .target_speed_mps = SPEED_MID_MPS, .steer_limit = 350.0f, .lost_timeout = false };
+    strategy_output_t out = { .mode = CAR_MODE_TRACKING, .target_speed_mps = SPEED_MID_MPS, .steer_limit = 350.0f, .search_error = line_error, .lost_timeout = false };
 
     if (!line_lost(bin)) {
         g_last_valid_err = line_error;
@@ -33,6 +33,8 @@ strategy_output_t track_strategy_step(float line_error, line_bin_t bin, imu_stat
         out.mode = CAR_MODE_LOST;
         out.target_speed_mps = SPEED_LOW_MPS;
         out.steer_limit = 450.0f;
+        // 丢线时当前误差会变成无效大值，搜索方向使用最后一次有效误差。
+        out.search_error = g_last_valid_err;
         // 超过丢线超时阈值，进入保护停车
         if ((tick_ms - g_lost_since_ms) > LINE_LOST_TIMEOUT_MS) {
             out.mode = CAR_MODE_PROTECT;
