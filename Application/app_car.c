@@ -33,10 +33,15 @@ void app_car_init(void) {
     bsp_imu_init(CAR_CTRL_DT_S);
     track_strategy_init();
     track_map_reset();
-    track_map_learning_init(&g_learn_ctx, 0.0f, 0.0f);
-    g_mode = CAR_MODE_LEARNING;
-    g_tick_ms = 0U;
     g_learning_done = false;
+    if (track_map_load_from_flash()) {
+        g_learning_done = true;
+        g_mode = CAR_MODE_TRACKING;
+    } else {
+        track_map_learning_init(&g_learn_ctx, 0.0f, 0.0f);
+        g_mode = CAR_MODE_LEARNING;
+    }
+    g_tick_ms = 0U;
 }
 
 void app_car_run_10ms(void) {
@@ -51,6 +56,7 @@ void app_car_run_10ms(void) {
         (void)track_map_learning_step(&g_learn_ctx, enc.distance_m, imu.yaw_deg, line_err, line_bin, false);
         if (enc.distance_m > 5.0f) {
             (void)track_map_learning_step(&g_learn_ctx, enc.distance_m, imu.yaw_deg, line_err, line_bin, true);
+            (void)track_map_save_to_flash();
             g_learning_done = true;
         }
     }

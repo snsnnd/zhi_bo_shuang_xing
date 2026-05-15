@@ -1,8 +1,28 @@
 #include "track_map.h"
+#include "../BSP/bsp_flash.h"
 #include "../Common/car_config.h"
+
+#define MAP_FLASH_ADDR 0x0801F800u
+#define MAP_FLASH_MAGIC 0x4D415031u
+#define MAP_FLASH_VER 1u
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint16_t count;
+    uint16_t reserved;
+    map_event_t events[MAP_MAX_EVENTS];
+    uint32_t checksum;
+} map_flash_blob_t;
 
 static map_event_t g_events[MAP_MAX_EVENTS];
 static uint16_t g_count;
+
+static uint32_t checksum32(const uint8_t *p, uint32_t n) {
+    uint32_t c = 0;
+    for (uint32_t i = 0; i < n; ++i) c = (c << 5) - c + p[i];
+    return c;
+}
 
 void track_map_reset(void) { g_count = 0U; }
 
@@ -28,6 +48,29 @@ const map_event_t *track_map_find_next(float distance_m) {
 }
 
 uint16_t track_map_count(void) { return g_count; }
+const map_event_t *track_map_events_data(void) { return g_events; }
+
+bool track_map_save_to_flash(void) {
+    map_flash_blob_t b;
+    b.magic = MAP_FLASH_MAGIC;
+    b.version = MAP_FLASH_VER;
+    b.count = g_count;
+    b.reserved = 0U;
+    for (uint16_t i = 0; i < MAP_MAX_EVENTS; ++i) b.events[i] = g_events[i];
+    b.checksum = checksum32((const uint8_t *)&b, (uint32_t)(sizeof(b) - sizeof(uint32_t)));
+    return bsp_flash_erase_page(MAP_FLASH_ADDR) && bsp_flash_write(MAP_FLASH_ADDR, &b, (uint32_t)sizeof(b));
+}
+
+bool track_map_load_from_flash(void) {
+    map_flash_blob_t b;
+    if (!bsp_flash_read(MAP_FLASH_ADDR, &b, (uint32_t)sizeof(b))) return false;
+    if (b.magic != MAP_FLASH_MAGIC || b.version != MAP_FLASH_VER || b.count > MAP_MAX_EVENTS) return false;
+    uint32_t c = checksum32((const uint8_t *)&b, (uint32_t)(sizeof(b) - sizeof(uint32_t)));
+    if (c != b.checksum) return false;
+    g_count = b.count;
+    for (uint16_t i = 0; i < g_count; ++i) g_events[i] = b.events[i];
+    return true;
+}
 
 static float fabsf_local(float x) { return x < 0.0f ? -x : x; }
 

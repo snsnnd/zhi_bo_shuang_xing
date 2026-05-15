@@ -28,6 +28,10 @@ bool track_map_add_event(map_event_t event);
 const map_event_t *track_map_find_current(float distance_m);
 const map_event_t *track_map_find_next(float distance_m);
 uint16_t track_map_count(void);
+const map_event_t *track_map_events_data(void);
+
+bool track_map_save_to_flash(void);
+bool track_map_load_from_flash(void);
 
 void track_map_learning_init(map_learning_ctx_t *ctx, float start_dist, float yaw_deg);
 bool track_map_learning_step(map_learning_ctx_t *ctx, float distance_m, float yaw_deg, float line_err, line_bin_t bin, bool force_finalize);
