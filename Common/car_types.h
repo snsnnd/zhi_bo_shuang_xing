@@ -45,6 +45,8 @@ typedef struct {
     float yaw_deg;
     float gyro_z_dps;
     float yaw_rate_filtered;
+    float pitch_deg;
+    float roll_deg;
 } imu_state_t;
 
 typedef struct {

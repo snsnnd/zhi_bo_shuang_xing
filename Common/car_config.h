@@ -25,4 +25,13 @@
 
 #define MAP_MAX_EVENTS                (64U)
 
+#define LINE_RAW_LPF_ALPHA            (0.35f)
+#define LINE_ERR_LPF_ALPHA            (0.45f)
+#define ENC_SPD_LPF_ALPHA             (0.30f)
+#define IMU_GYRO_LPF_ALPHA            (0.20f)
+#define IMU_COMP_ALPHA                (0.96f)
+#define YAW_DRIFT_FIX_RATE_TH_DPS     (6.0f)
+#define YAW_DRIFT_FIX_TILT_TH_DEG     (8.0f)
+#define YAW_DRIFT_DECAY_WHEN_STRAIGHT (0.9995f)
+
 #endif
