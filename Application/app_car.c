@@ -1,14 +1,21 @@
 #include "app_car.h"
 
 #include "main.h"
+#include "../Common/car_config.h"
+#include "../Common/runtime_config.h"
+#include "../Common/car_types.h"
 #include "../BSP/bsp_encoder.h"
 #include "../BSP/bsp_imu.h"
 #include "../BSP/bsp_line.h"
 #include "../BSP/bsp_motor.h"
 #include "../BSP/bsp_oled.h"
-#include "../Common/car_config.h"
-#include "../Common/car_types.h"
+#if CAR_ENABLE_HC05
+#include "../BSP/bsp_hc05.h"
+#endif
 #include "../Control/line_pid.h"
+#if CAR_ENABLE_REMOTE_CONTROL
+#include "../Control/remote_control.h"
+#endif
 #include "../Control/speed_pid.h"
 #if CAR_ENABLE_PID_SCOPE
 #include "../Debug/PIDScope/pid_scope_adapter.h"
@@ -19,11 +26,9 @@
 // ------------------------- 全局控制对象 -------------------------
 // 循迹 PID：将 line_error 映射到转向量 steer
 static line_pid_t g_line_pid;
-#if CAR_ENABLE_SPEED_PID
 // 左/右轮速度 PID：将目标速度映射到 PWM
 static speed_pid_t g_lspd_pid;
 static speed_pid_t g_rspd_pid;
-#endif
 
 // 当前整车模式（学习/循迹/预测/丢线/保护等）
 static car_mode_t g_mode = CAR_MODE_IDLE;
@@ -34,12 +39,10 @@ static volatile uint8_t g_control_tick_div;
 static volatile uint32_t g_control_overrun;
 static oled_runtime_t g_rt;
 static bool g_rt_valid;
-#if CAR_ENABLE_TRACK_MAP_LEARNING
 // 第一圈地图学习上下文
 static map_learning_ctx_t g_learn_ctx;
-// 是否已完成学习（或已从 Flash 成功加载）
+// 是否已完成第一圈地图学习
 static bool g_learning_done;
-#endif
 
 // 限幅工具函数：防止控制量越界
 static float clampf(float x, float lo, float hi) {
@@ -48,10 +51,60 @@ static float clampf(float x, float lo, float hi) {
     return x;
 }
 
-#if !CAR_ENABLE_SPEED_PID
 static float speed_to_open_loop_pwm(float target_mps) {
     return clampf((target_mps / SPEED_HIGH_MPS) * CAR_MAX_PWM, CAR_MIN_PWM, CAR_MAX_PWM);
 }
+
+static void speed_pid_observe_open_loop(speed_pid_t *pid, float target, float feedback, float output) {
+    if (!pid) return;
+    pid->last_target = target;
+    pid->last_feedback = feedback;
+    pid->last_error = target - feedback;
+    pid->last_output = output;
+    pid->last_p_term = pid->kp * pid->last_error;
+    pid->last_i_term = pid->integral;
+    pid->last_d_term = 0.0f;
+}
+
+#if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
+static void apply_remote_pid_update(const remote_pid_update_t *u) {
+    if (!u || !u->pending) return;
+
+    if (u->target == REMOTE_PID_LINE) {
+        g_line_pid.kp = u->kp;
+        g_line_pid.ki = u->ki;
+        g_line_pid.kd = u->kd;
+        line_pid_reset(&g_line_pid);
+    }
+
+    if (u->target == REMOTE_PID_SPEED_LEFT || u->target == REMOTE_PID_SPEED_BOTH) {
+        g_lspd_pid.kp = u->kp;
+        g_lspd_pid.ki = u->ki;
+        g_lspd_pid.kd = u->kd;
+        speed_pid_reset(&g_lspd_pid);
+    }
+    if (u->target == REMOTE_PID_SPEED_RIGHT || u->target == REMOTE_PID_SPEED_BOTH) {
+        g_rspd_pid.kp = u->kp;
+        g_rspd_pid.ki = u->ki;
+        g_rspd_pid.kd = u->kd;
+        speed_pid_reset(&g_rspd_pid);
+    }
+
+    remote_control_clear_pid_update();
+}
+#endif
+
+#if CAR_ENABLE_HC05 && (CAR_ENABLE_PID_SCOPE_OVER_HC05 || CAR_ENABLE_REMOTE_CONTROL)
+static void hc05_app_rx(uint8_t byte) {
+#if CAR_ENABLE_PID_SCOPE && CAR_ENABLE_PID_SCOPE_OVER_HC05
+    if (runtime_feature_enabled(RC_FEATURE_PID_SCOPE) && runtime_feature_enabled(RC_FEATURE_PID_SCOPE_OVER_HC05)) pid_scope_rx_byte(byte);
+#endif
+#if CAR_ENABLE_REMOTE_CONTROL
+    remote_control_rx_byte(byte);
+#endif
+}
+
+static int hc05_write_text(const char *text) { return bsp_hc05_send_text(text); }
 #endif
 
 void app_car_on_1ms_tick(void) {
@@ -79,22 +132,33 @@ void app_car_run_scheduler(void) {
     }
 }
 
-// 整车初始化：初始化 PID、IMU、策略模块，并尝试从 Flash 读取地图
+// 整车初始化：初始化 PID、IMU 和策略模块。地图只保存在 RAM，并通过上位机保存。
 void app_car_init(void) {
+    runtime_config_init();
     // 1) 初始化循迹/速度 PID 参数（这里是默认参数，后续建议通过标定页在线调）
     line_pid_init(&g_line_pid, 120.0f, 0.0f, 25.0f, CAR_CTRL_DT_S, -350.0f, 350.0f);
-#if CAR_ENABLE_SPEED_PID
     speed_pid_init(&g_lspd_pid, 500.0f, 50.0f, 0.0f, CAR_CTRL_DT_S, 0.0f, CAR_MAX_PWM);
     speed_pid_init(&g_rspd_pid, 500.0f, 50.0f, 0.0f, CAR_CTRL_DT_S, 0.0f, CAR_MAX_PWM);
+
+#if CAR_ENABLE_HC05
+#if CAR_ENABLE_PID_SCOPE_OVER_HC05 || CAR_ENABLE_REMOTE_CONTROL
+    hc05_port_t hc05_port = { bsp_hc05_port_write, bsp_hc05_port_time_ms, hc05_app_rx };
+    bsp_hc05_init(&hc05_port);
+#else
+    bsp_hc05_init(0);
+#endif
+#endif
+
+#if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
+    remote_control_port_t rc_port = { hc05_write_text, bsp_hc05_port_time_ms };
+    remote_control_init(&rc_port);
 #endif
 
 #if CAR_ENABLE_PID_SCOPE
     pid_scope_init();
     pid_scope_bind_line_pid(&g_line_pid);
-#if CAR_ENABLE_SPEED_PID
     pid_scope_bind_left_speed_pid(&g_lspd_pid);
     pid_scope_bind_right_speed_pid(&g_rspd_pid);
-#endif
 #endif
 
     // 2) 初始化 IMU 与策略模块；IMU 可通过开关关闭，便于先测循迹/电机。
@@ -103,26 +167,15 @@ void app_car_init(void) {
 #endif
     track_strategy_init();
 
-    // 3) 地图学习/Flash 都是高级功能，默认关闭，避免初期调车时写 Flash 或进入学习状态。
+    // 3) 地图学习是高级功能，默认关闭；学习结果通过上位机通信保存，不再写 MCU Flash。
     track_map_reset();
-#if CAR_ENABLE_TRACK_MAP_LEARNING
     g_learning_done = false;
-#if CAR_ENABLE_TRACK_MAP_FLASH
-    if (track_map_load_from_flash()) {
-        // 加载成功：直接进入循迹/预测主流程，可跳过第一圈学习
-        g_learning_done = true;
-        g_mode = CAR_MODE_TRACKING;
-    } else {
-#endif
-        // 加载失败：进入学习模式，等待首圈自动打点
+    if (runtime_feature_enabled(RC_FEATURE_TRACK_MAP_LEARNING)) {
         track_map_learning_init(&g_learn_ctx, 0.0f, 0.0f);
         g_mode = CAR_MODE_LEARNING;
-#if CAR_ENABLE_TRACK_MAP_FLASH
+    } else {
+        g_mode = CAR_MODE_TRACKING;
     }
-#endif
-#else
-    g_mode = CAR_MODE_TRACKING;
-#endif
 
     // 4) 复位系统节拍
     g_tick_ms = 0U;
@@ -140,63 +193,58 @@ void app_car_run_10ms(void) {
 
     // ---------- A. 采样层：读取已滤波后的传感器状态 ----------
     // 注意：bsp_line_get_raw() 返回的是经过 LPF 的值，不是裸 ADC。
-#if CAR_ENABLE_LINE_SENSOR
-    line_raw_t line_raw = bsp_line_get_raw();
+    line_raw_t line_raw;
+    line_bin_t line_bin;
+    float line_err;
+    if (runtime_feature_enabled(RC_FEATURE_LINE_SENSOR)) {
+        line_raw = bsp_line_get_raw();
     // 二值判线状态（黑/白）用于状态机与急弯/丢线判定
-    line_bin_t line_bin = bsp_line_get_bin();
+        line_bin = bsp_line_get_bin();
     // 循迹误差（已轻度滤波）用于 line PID
-    float line_err = bsp_line_get_error();
-#else
+        line_err = bsp_line_get_error();
+    } else {
     // 关闭循迹时假定车辆在线中央，便于单独测试 IMU/OLED/电机链路。
-    line_raw_t line_raw = { .l2 = 0.0f, .l1 = 1.0f, .r1 = 1.0f, .r2 = 0.0f };
-    line_bin_t line_bin = { .l2 = false, .l1 = true, .r1 = true, .r2 = false };
-    float line_err = 0.0f;
-#endif
+        line_raw = (line_raw_t){ .l2 = 0.0f, .l1 = 1.0f, .r1 = 1.0f, .r2 = 0.0f };
+        line_bin = (line_bin_t){ .l2 = false, .l1 = true, .r1 = true, .r2 = false };
+        line_err = 0.0f;
+    }
     // IMU 当前姿态/角速度状态
-#if CAR_ENABLE_IMU
-    imu_state_t imu = bsp_imu_get_state();
-#else
-    imu_state_t imu = {0};
-#endif
+    imu_state_t imu = runtime_feature_enabled(RC_FEATURE_IMU) ? bsp_imu_get_state() : (imu_state_t){0};
     // 编码器速度与里程（速度已滤波，里程直通）
-#if CAR_ENABLE_ENCODER
-    encoder_state_t enc = bsp_encoder_get_state();
-#else
-    encoder_state_t enc = {0};
-#endif
+    encoder_state_t enc = runtime_feature_enabled(RC_FEATURE_ENCODER) ? bsp_encoder_get_state() : (encoder_state_t){0};
 
     // ---------- B. 学习层：第一圈自动识别地图事件 ----------
     // 条件：仅在未学习完成时运行
-#if CAR_ENABLE_TRACK_MAP_LEARNING
-    if (!g_learning_done) {
+    if (runtime_feature_enabled(RC_FEATURE_TRACK_MAP_LEARNING) && !g_learning_done) {
         // 持续喂给学习状态机：根据误差趋势 / yaw 变化 / 外侧触发自动识别路段
         (void)track_map_learning_step(&g_learn_ctx, enc.distance_m, imu.yaw_deg, line_err, line_bin, false);
 
         // 这里用 5m 作为示例“首圈完成”条件；实车建议替换为起终点标志或圈计数
         if (enc.distance_m > 5.0f) {
-            // 强制收尾，确保最后一个路段也能落盘
+            // 强制收尾，确保最后一个路段也能加入 RAM 事件表，后续由上位机保存。
             (void)track_map_learning_step(&g_learn_ctx, enc.distance_m, imu.yaw_deg, line_err, line_bin, true);
-            // 保存到 Flash，供下次上电直接加载
-#if CAR_ENABLE_TRACK_MAP_FLASH
-            (void)track_map_save_to_flash();
-#endif
             g_learning_done = true;
         }
     }
-#endif
 
     // ---------- C. 定位层：基于里程查询当前与下一事件 ----------
-#if CAR_ENABLE_MAP_PREDICTION
-    const map_event_t *ev = track_map_find_current(enc.distance_m);
-    const map_event_t *next_ev = track_map_find_next(enc.distance_m);
-#else
-    const map_event_t *ev = 0;
-    const map_event_t *next_ev = 0;
-#endif
+    const map_event_t *ev = runtime_feature_enabled(RC_FEATURE_MAP_PREDICTION) ? track_map_find_current(enc.distance_m) : 0;
+    const map_event_t *next_ev = runtime_feature_enabled(RC_FEATURE_MAP_PREDICTION) ? track_map_find_next(enc.distance_m) : 0;
 
     // ---------- D. 策略层：计算目标模式/速度/转向限幅 ----------
     strategy_output_t so = track_strategy_step(line_err, line_bin, imu, enc, g_tick_ms, ev);
     g_mode = so.mode;
+
+#if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
+    remote_control_state_t rc = remote_control_get_state();
+    if (runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL)) {
+        apply_remote_pid_update(&rc.pid_update);
+        if (rc.mode_override) g_mode = rc.mode;
+        if (rc.speed_override) so.target_speed_mps = rc.target_speed_mps;
+        if (rc.speed_limit_override) so.target_speed_mps = clampf(so.target_speed_mps, 0.0f, rc.speed_limit_mps);
+        if (rc.force_stop) g_mode = CAR_MODE_PROTECT;
+    }
+#endif
 
     // ---------- E. 控制层：循迹 PID + 双速度 PID ----------
     // 1) 由 line error 得到转向量 steer
@@ -222,14 +270,18 @@ void app_car_run_10ms(void) {
     }
 
     // 4) 左右轮速度闭环 -> PWM
-#if CAR_ENABLE_SPEED_PID
-    float left_pwm = speed_pid_update(&g_lspd_pid, left_target, enc.left_speed_mps);
-    float right_pwm = speed_pid_update(&g_rspd_pid, right_target, enc.right_speed_mps);
-#else
+    float left_pwm;
+    float right_pwm;
+    if (runtime_feature_enabled(RC_FEATURE_SPEED_PID)) {
+        left_pwm = speed_pid_update(&g_lspd_pid, left_target, enc.left_speed_mps);
+        right_pwm = speed_pid_update(&g_rspd_pid, right_target, enc.right_speed_mps);
+    } else {
     // 速度闭环未验证前，使用速度目标到 PWM 的简单前馈，降低调试复杂度。
-    float left_pwm = speed_to_open_loop_pwm(left_target);
-    float right_pwm = speed_to_open_loop_pwm(right_target);
-#endif
+        left_pwm = speed_to_open_loop_pwm(left_target);
+        right_pwm = speed_to_open_loop_pwm(right_target);
+        speed_pid_observe_open_loop(&g_lspd_pid, left_target, enc.left_speed_mps, left_pwm);
+        speed_pid_observe_open_loop(&g_rspd_pid, right_target, enc.right_speed_mps, right_pwm);
+    }
 
     // ---------- F. 执行层：输出电机命令 ----------
     motor_cmd_t cmd = {
@@ -245,14 +297,24 @@ void app_car_run_10ms(void) {
         cmd.right_pwm = 0.0f;
     }
 
-#if CAR_ENABLE_MOTOR_OUTPUT
-    bsp_motor_set(cmd);
+    if (runtime_feature_enabled(RC_FEATURE_MOTOR_OUTPUT)) {
+#if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
+        if (!runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL) || (rc.motor_enable && !rc.force_stop)) {
+            bsp_motor_set(cmd);
+        } else {
+            motor_cmd_t safe_cmd = { .left_pwm = 0.0f, .right_pwm = 0.0f, .left_dir = true, .right_dir = true };
+            bsp_motor_set(safe_cmd);
+            cmd = safe_cmd;
+        }
 #else
+        bsp_motor_set(cmd);
+#endif
+    } else {
     // 电机输出关闭时仍下发 0 PWM，保证切换阶段不会残留上一次命令。
     motor_cmd_t safe_cmd = { .left_pwm = 0.0f, .right_pwm = 0.0f, .left_dir = true, .right_dir = true };
     bsp_motor_set(safe_cmd);
     cmd = safe_cmd;
-#endif
+    }
 
     // ---------- G. 缓存后台调试数据 ----------
     // OLED/PIDScope 属于慢任务，只缓存最新数据，后台空闲时再发送/刷新。
@@ -274,11 +336,26 @@ void app_car_run_10ms(void) {
 }
 
 void app_car_run_background(void) {
+#if CAR_ENABLE_HC05
+    if (runtime_feature_enabled(RC_FEATURE_HC05)) bsp_hc05_poll();
+#endif
+
+#if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
+    if (runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL)) remote_control_poll();
+#endif
+
 #if CAR_ENABLE_OLED
-    if (g_rt_valid) bsp_oled_show_runtime(g_mode, &g_rt);
+    if (runtime_feature_enabled(RC_FEATURE_OLED)) {
+#if CAR_ENABLE_HC05 && CAR_ENABLE_HC05_OLED_TEST
+        if (runtime_feature_enabled(RC_FEATURE_HC05_OLED_TEST)) bsp_oled_show_hc05_activity(bsp_hc05_rx_count(), bsp_hc05_tx_count());
+        else if (g_rt_valid) bsp_oled_show_runtime(g_mode, &g_rt);
+#else
+        if (g_rt_valid) bsp_oled_show_runtime(g_mode, &g_rt);
+#endif
+    }
 #endif
 
 #if CAR_ENABLE_PID_SCOPE
-    pid_scope_poll_10ms();
+    if (runtime_feature_enabled(RC_FEATURE_PID_SCOPE)) pid_scope_poll_10ms();
 #endif
 }

@@ -1,6 +1,10 @@
 #include "pid_scope_adapter.h"
 
 #include "../../Common/car_config.h"
+#include "../../Common/runtime_config.h"
+#if CAR_ENABLE_PID_SCOPE_OVER_HC05
+#include "../../BSP/bsp_hc05.h"
+#endif
 #include "pid_debug.h"
 #include "main.h"
 
@@ -10,9 +14,14 @@ static speed_pid_t *g_right_speed_pid;
 static uint32_t g_last_send_ms;
 
 __weak int pid_scope_port_write(const uint8_t *data, uint16_t len) {
+#if CAR_ENABLE_PID_SCOPE_OVER_HC05
+    if (!runtime_feature_enabled(RC_FEATURE_PID_SCOPE) || !runtime_feature_enabled(RC_FEATURE_PID_SCOPE_OVER_HC05)) return 0;
+    return bsp_hc05_send(data, len);
+#else
     (void)data;
     (void)len;
     return 0;
+#endif
 }
 
 static uint32_t debug_time_ms(void) { return HAL_GetTick(); }

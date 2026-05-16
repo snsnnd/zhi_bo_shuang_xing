@@ -12,6 +12,6 @@
 - `app_car_run_background()`：慢速后台任务，负责 OLED 和 PIDScope 等调试输出。
 - `app_car_get_control_overrun()`：查看控制任务来不及处理时的过载计数。
 
-调试阶段通过 `Common/car_config.h` 中的 `CAR_ENABLE_*` 开关逐步打开电机、速度闭环、地图学习、Flash 保存和预测调速。
+调试阶段通过 `Common/car_config.h` 中的 `CAR_ENABLE_*` 开关逐步打开电机、速度闭环、地图学习和预测调速。需要保存的遥测/地图数据由上位机导出。
 
 如启用 `CAR_ENABLE_PID_SCOPE`，本层会把循迹 PID 和速度 PID 绑定到 `Debug/PIDScope` 适配层，并在 10 ms 循环末尾轮询发送调参遥测。

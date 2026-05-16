@@ -15,14 +15,15 @@ static float pin_to_line_value(GPIO_PinState s)
     return active ? 1.0f : 0.0f;
 }
 
-// 采样循迹模块
+// 采样循迹模块：商家模块 O1/O2/O3/O4 从右到左排列。
+// 实际接线：O1-PA4=R2，O2-PA5=R1，O3-PA6=L1，O4-PA7=L2；黑线输出高电平。
 static void sample_gpio(void)
 {
     line_raw_t raw = {
-        .l2 = pin_to_line_value(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4)),
-        .l1 = pin_to_line_value(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_5)),
-        .r1 = pin_to_line_value(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_6)),
-        .r2 = pin_to_line_value(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7))};
+        .l2 = pin_to_line_value(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7)),
+        .l1 = pin_to_line_value(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_6)),
+        .r1 = pin_to_line_value(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_5)),
+        .r2 = pin_to_line_value(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4))};
     bsp_line_set_raw(raw);
 }
 

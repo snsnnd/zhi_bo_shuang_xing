@@ -5,6 +5,7 @@
 #define PID_TX_BUF_SIZE 1024u
 #define PID_RX_MAX_PAYLOAD 128u
 #define PID_FRAME_OVERHEAD 10u
+#define PID_TELEMETRY_PAYLOAD_SIZE 54u
 
 typedef struct {
     uint8_t data[PID_TX_BUF_SIZE];
@@ -69,6 +70,44 @@ static int send_frame(uint8_t type, uint8_t device_id, uint8_t channel_id, const
     return rb_push(frame, total);
 }
 
+static void put_u16_le(uint8_t *dst, uint16_t value) {
+    dst[0] = (uint8_t)(value & 0xFFu);
+    dst[1] = (uint8_t)(value >> 8u);
+}
+
+static void put_u32_le(uint8_t *dst, uint32_t value) {
+    dst[0] = (uint8_t)(value & 0xFFu);
+    dst[1] = (uint8_t)((value >> 8u) & 0xFFu);
+    dst[2] = (uint8_t)((value >> 16u) & 0xFFu);
+    dst[3] = (uint8_t)(value >> 24u);
+}
+
+static void put_float_le(uint8_t *dst, float value) {
+    uint32_t raw;
+    memcpy(&raw, &value, sizeof(raw));
+    put_u32_le(dst, raw);
+}
+
+static uint16_t encode_telemetry_payload(uint8_t *payload, const pid_debug_telemetry_t *tel) {
+    uint16_t offset = 0u;
+    const float values[12] = {
+        tel->target, tel->feedback, tel->error, tel->output,
+        tel->kp, tel->ki, tel->kd,
+        tel->p_term, tel->i_term, tel->d_term,
+        tel->extra1, tel->extra2
+    };
+
+    put_u32_le(&payload[offset], tel->timestamp_ms);
+    offset = (uint16_t)(offset + 4u);
+    for (uint8_t i = 0u; i < 12u; ++i) {
+        put_float_le(&payload[offset], values[i]);
+        offset = (uint16_t)(offset + 4u);
+    }
+    put_u16_le(&payload[offset], tel->status_flags);
+    offset = (uint16_t)(offset + 2u);
+    return offset;
+}
+
 void pid_debug_init(const pid_debug_port_t *port) {
     memset(&g_tx, 0, sizeof(g_tx));
     memset(&g_port, 0, sizeof(g_port));
@@ -77,7 +116,9 @@ void pid_debug_init(const pid_debug_port_t *port) {
 
 int pid_debug_send_telemetry(uint8_t device_id, uint8_t channel_id, const pid_debug_telemetry_t *tel) {
     if (tel == 0) return -1;
-    return send_frame(PID_FRAME_TELEMETRY, device_id, channel_id, (const uint8_t *)tel, (uint16_t)sizeof(*tel));
+    uint8_t payload[PID_TELEMETRY_PAYLOAD_SIZE];
+    uint16_t len = encode_telemetry_payload(payload, tel);
+    return send_frame(PID_FRAME_TELEMETRY, device_id, channel_id, payload, len);
 }
 
 int pid_debug_send_param_report(uint8_t device_id, uint8_t channel_id, const pid_debug_param_t *param) {

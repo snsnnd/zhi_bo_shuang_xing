@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "../Common/car_types.h"
 
-// One learned track segment persisted in Flash and queried by distance.
+// One learned track segment kept in RAM and queried by distance.
 typedef struct {
     uint16_t id;
     float start_dist_m;
@@ -32,9 +32,6 @@ const map_event_t *track_map_find_current(float distance_m);
 const map_event_t *track_map_find_next(float distance_m);
 uint16_t track_map_count(void);
 const map_event_t *track_map_events_data(void);
-
-bool track_map_save_to_flash(void);
-bool track_map_load_from_flash(void);
 
 /* First-lap learning state machine API. */
 void track_map_learning_init(map_learning_ctx_t *ctx, float start_dist, float yaw_deg);

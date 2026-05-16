@@ -31,7 +31,7 @@ typedef enum
     SEG_RISK      // 十字等特殊路段
 } segment_type_t; // 赛道段类型
 
-// Normalized four-channel line sensor values: L2/L1/R1/R2 from left to right.
+// Normalized four-channel line sensor values in vehicle order: L2/L1/R1/R2 from left to right.
 typedef struct
 {
     float l2;
