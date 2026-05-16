@@ -11,6 +11,13 @@ typedef struct {
     float prev_err;
     float out_min;
     float out_max;
+    float last_target;
+    float last_feedback;
+    float last_error;
+    float last_output;
+    float last_p_term;
+    float last_i_term;
+    float last_d_term;
 } speed_pid_t;
 
 /* Fixed-period speed PID API. */

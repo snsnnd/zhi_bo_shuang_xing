@@ -16,7 +16,7 @@
 ## 核心流程
 
 1. `app_car_init()` 初始化 PID、IMU、策略模块，并优先从 Flash 读取已学习地图。
-2. `main.c` 使用 `HAL_GetTick()` 对 `app_car_run_10ms()` 做 10 ms 节拍调度。
+2. SysTick 每 1 ms 调用应用层 `app_car_on_1ms_tick()`，主循环通过 `app_car_run_scheduler()` 执行 10 ms 控制任务。
 3. 第一圈未学习完成时，`track_map_learning_step()` 根据里程、yaw、循迹误差和外侧传感器自动生成路段事件。
 4. 学习完成后通过 `track_map_save_to_flash()` 保存地图，上电后可直接加载进入循迹。
 5. `track_strategy_step()` 根据当前路段、丢线状态和直道判断输出目标速度与转向限幅。
@@ -89,6 +89,32 @@
 - `CAR_ENABLE_TRACK_MAP_FLASH`：地图 Flash 保存/加载。
 - `CAR_ENABLE_MAP_PREDICTION`：基于地图事件预测调速。
 - `CAR_ENABLE_LOST_PROTECTION`：丢线超时停车保护。
+- `CAR_ENABLE_PID_SCOPE`：PIDScope 串口调参适配；启用前需要先配置 USART 并把适配层源文件加入 Keil 工程。
+
+## PIDScope 调参工具
+
+你提供的 `https://github.com/snsnnd/PID_Parameter_Tuning.git` 是一个 PySide6 串口上位机，使用二进制协议传输 PID 遥测和参数。协议帧格式为：
+
+- 帧头：`0xA5 0x5A`
+- 版本：`0x01`
+- 类型：`0x01` 遥测，`0x02` 写参数，`0x03` 参数回报
+- 设备号：当前工程默认 `PID_SCOPE_DEVICE_ID=1`
+- 通道号：`0` 循迹转向 PID，`1` 左轮速度 PID，`2` 右轮速度 PID
+- 长度：小端 `uint16_t`
+- 载荷：遥测为 `timestamp,target,feedback,error,output,kp,ki,kd,p/i/d,extra1,extra2,status`
+- CRC：Modbus CRC16，小端
+
+本工程已新增 `Debug/PIDScope/` 独立适配层。当前 CubeMX 没有配置 USART，所以默认不开启。使用步骤：
+
+1. 在 `PID_Parameter_Tuning` 目录执行 `pip install -r requirements.txt`，再运行 `python app.py`。
+2. 在 CubeMX 给当前工程打开 USART，例如 USART1，波特率可先用 `115200`，稳定后再提高。
+3. 将 `Debug/PIDScope/pid_debug.c` 和 `Debug/PIDScope/pid_scope_adapter.c` 加到 Keil 工程。
+4. 实现 `pid_scope_port_write(const uint8_t *data, uint16_t len)`，内部调用你的 USART 发送函数。
+5. 在 USART 接收中断或轮询代码中，把每个收到的字节传给 `pid_scope_rx_byte(byte)`。
+6. 设置 `CAR_ENABLE_PID_SCOPE=1U`，如果要调左右轮速度 PID，还要设置 `CAR_ENABLE_SPEED_PID=1U`。
+7. 上位机选择串口和波特率连接，观察 `target/feedback/error/output` 波形，在 Advanced Tuning 页写入 PID 参数。
+
+注意：写入参数是 RAM 内实时生效，掉电不会保存。确认参数后再手工写回 `Application/app_car.c` 的 PID 初始化值。
 
 - `CAR_CTRL_DT_S`：控制周期，当前为 10 ms。
 - `CAR_MAX_PWM`、`CAR_MIN_PWM`：PWM 输出限幅。
@@ -99,20 +125,24 @@
 - `ENC_SPD_LPF_ALPHA`：编码器速度低通滤波系数。
 - `IMU_GYRO_LPF_ALPHA`、`IMU_COMP_ALPHA`：IMU gyro/yaw 和 pitch/roll 滤波系数。
 - `YAW_DRIFT_FIX_*`：直行近水平时的 yaw 慢漂移修正阈值。
-- `ENCODER_COUNTS_PER_REV`、`WHEEL_DIAMETER_M`：编码器和车轮标定参数。
+- `ENCODER_HALL_PPR`、`ENCODER_GEAR_RATIO`、`ENCODER_QUAD_FACTOR`：编码器物理参数，当前按 `11 x 48 x 4 = 2112` 计数/输出轴一圈。
+- `ENCODER_COUNTS_PER_REV`、`WHEEL_DIAMETER_M`：编码器总脉冲数和车轮直径，用于速度/里程换算。
+- `SPEED_*_MPS`：速度档位，当前按 65mm 轮径、约 60RPM 对应 0.20m/s 做保守初始值。
 - `MPU6050_GYRO_Z_OFFSET_DPS`：陀螺仪 Z 轴零偏。
 - `MPU6050_GYRO_CALIB_SAMPLES`、`MPU6050_GYRO_CALIB_DELAY_MS`：上电 gyro_z 自动零漂校准采样参数。
 - `FLASH_MAP_ADDR`、`FLASH_MAP_SIZE_BYTES`：地图持久化 Flash 区域。
 
 ## 中断策略
 
-当前工程建议先保持主循环 10 ms 调度，不把整车控制逻辑放进中断。
+当前工程使用 SysTick 作为 1ms 调度源，中断入口只调用应用层 `app_car_on_1ms_tick()` 置位 10ms 控制任务，不在中断里执行 PID/OLED/I2C/Flash。
 
 - 必须保留 SysTick 中断：HAL 依赖 SysTick 维护 `HAL_GetTick()`，当前 10 ms 调度也依赖它。
 - 暂不需要编码器中断：TIM2/TIM3 硬件计数器可在 10 ms 周期内读取差值，CPU 开销小且更稳定。
 - 暂不需要循迹 GPIO 中断：循迹是连续采样信号，周期轮询比边沿中断更适合做滤波和 PID。
 - 暂不建议在中断里跑 `app_car_run_10ms()`：其中包含 I2C OLED/IMU、Flash、PID 和策略逻辑，放进 ISR 会造成阻塞和优先级问题。
-- 后续如需更稳定周期，可新增一个基础定时器中断只置位 `g_ctrl_10ms_flag`，主循环看到标志后再执行 `app_car_run_10ms()`。
+- 主循环调用 `app_car_run_scheduler()`：有控制任务到期就运行 `app_car_run_10ms()`，否则运行 `app_car_run_background()`。
+- 如果上一个 10ms 控制周期还没处理完，应用层只记录 overrun，不补跑过期 PID；可通过 `app_car_get_control_overrun()` 查看过载次数。
+- 后续如需改成 TIMx，只要在 TIM 中断里调用 `app_car_on_1ms_tick()` 或等价的应用层 tick 接口即可。
 
 ## CubeMX 生成文件说明
 
@@ -129,7 +159,7 @@
 ## 实车注意事项
 
 - `FLASH_MAP_ADDR=0x0800F800` 会占用 STM32F103C8 Flash 末尾 2KB，固件链接大小必须避开该区域。
-- `ENCODER_COUNTS_PER_REV` 需要按编码器线数、倍频方式和减速比重新标定。
+- `ENCODER_COUNTS_PER_REV` 当前来自 `11 x 48 x 4 = 2112`；如果更换电机减速比，要同步修改 `ENCODER_GEAR_RATIO`。
 - `WHEEL_DIAMETER_M` 需要按实车轮径测量值修正。
 - 上电零漂校准期间车辆必须静止，否则 yaw 会带入错误偏置。
 - 如果电机方向反了，优先调整电机接线或 `bsp_motor.c` 中 PB12-PB15 的方向映射。

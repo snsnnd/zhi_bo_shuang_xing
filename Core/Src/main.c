@@ -100,13 +100,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    static uint32_t last_ctrl_tick = 0U;
-    uint32_t now = HAL_GetTick();
-    if ((now - last_ctrl_tick) >= 10U)
-    {
-      last_ctrl_tick = now;
-      app_car_run_10ms();
-    }
+    app_car_run_scheduler();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

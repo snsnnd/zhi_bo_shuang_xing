@@ -15,6 +15,13 @@
 #define CAR_ENABLE_TRACK_MAP_FLASH (0U)    // 地图 Flash 保存/加载开关
 #define CAR_ENABLE_MAP_PREDICTION (0U)     // 使用地图事件做预测调速开关
 #define CAR_ENABLE_LOST_PROTECTION (0U)    // 丢线超时停车保护开关
+#define CAR_ENABLE_PID_SCOPE (0U)          // PIDScope 串口调参适配开关；未配置 USART 前保持 0U
+
+#define PID_SCOPE_DEVICE_ID (1U)           // 上位机设备号
+#define PID_SCOPE_CH_LINE (0U)             // 通道0：循迹转向 PID
+#define PID_SCOPE_CH_SPEED_LEFT (1U)       // 通道1：左轮速度 PID
+#define PID_SCOPE_CH_SPEED_RIGHT (2U)      // 通道2：右轮速度 PID
+#define PID_SCOPE_SEND_PERIOD_MS (50U)     // 遥测发送周期，50ms 对应 20Hz 波形
 
 /* Control-loop timing and PWM limits. */
 #define CAR_CTRL_DT_S (0.01f) // 控制周期
@@ -34,11 +41,11 @@
 #define STRAIGHT_YAW_RATE_TH_DPS (12.0f) // 用来判断小车是否在发生剧烈的车身扭动。
 
 /* Discrete target speed levels used by strategy and map events. */
-// 转速挡位
-#define SPEED_LOW_MPS (0.25f)     // 低档
-#define SPEED_MID_LOW_MPS (0.40f) // 中低档
-#define SPEED_MID_MPS (0.55f)     // 中档
-#define SPEED_HIGH_MPS (0.75f)    // 高档
+// 速度档位，按你给的 60RPM 示例先保守设置；65mm 轮径时 60RPM 约等于 0.20m/s。
+#define SPEED_LOW_MPS (0.10f)     // 低档：低速找线/初期调试
+#define SPEED_MID_LOW_MPS (0.16f) // 中低档：弯道/地图风险段
+#define SPEED_MID_MPS (0.20f)     // 中档：约等于 60RPM 的线速度
+#define SPEED_HIGH_MPS (0.25f)    // 高档：初期测试不要太快，后续可逐步加大
 
 /* Look-ahead distances reserved for future map-based prediction tuning. */
 // 预测距离
@@ -69,7 +76,10 @@
 
 /* Hardware calibration values. */
 #define LINE_SENSOR_ACTIVE_LEVEL (1U)    // 1U 代表 高电平代表扫线
-#define ENCODER_COUNTS_PER_REV (1560.0f) // 编码器每圈总脉冲数
+#define ENCODER_HALL_PPR (11.0f)         // 电机霍尔一圈脉冲数
+#define ENCODER_GEAR_RATIO (48.0f)       // 减速比，来自你给的 11x48x4
+#define ENCODER_QUAD_FACTOR (4.0f)       // STM32 编码器四倍频
+#define ENCODER_COUNTS_PER_REV (ENCODER_HALL_PPR * ENCODER_GEAR_RATIO * ENCODER_QUAD_FACTOR) // 输出轴每圈总脉冲数：2112
 #define WHEEL_DIAMETER_M (0.065f)        // 车轮直径 m
 
 #define MPU6050_I2C_ADDR (0x68U << 1)

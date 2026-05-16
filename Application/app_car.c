@@ -1,5 +1,6 @@
 #include "app_car.h"
 
+#include "main.h"
 #include "../BSP/bsp_encoder.h"
 #include "../BSP/bsp_imu.h"
 #include "../BSP/bsp_line.h"
@@ -9,6 +10,9 @@
 #include "../Common/car_types.h"
 #include "../Control/line_pid.h"
 #include "../Control/speed_pid.h"
+#if CAR_ENABLE_PID_SCOPE
+#include "../Debug/PIDScope/pid_scope_adapter.h"
+#endif
 #include "../Strategy/track_map.h"
 #include "../Strategy/track_strategy.h"
 
@@ -25,6 +29,11 @@ static speed_pid_t g_rspd_pid;
 static car_mode_t g_mode = CAR_MODE_IDLE;
 // 系统毫秒节拍（10ms 周期累加）
 static uint32_t g_tick_ms;
+static volatile uint8_t g_control_due;
+static volatile uint8_t g_control_tick_div;
+static volatile uint32_t g_control_overrun;
+static oled_runtime_t g_rt;
+static bool g_rt_valid;
 #if CAR_ENABLE_TRACK_MAP_LEARNING
 // 第一圈地图学习上下文
 static map_learning_ctx_t g_learn_ctx;
@@ -45,6 +54,31 @@ static float speed_to_open_loop_pwm(float target_mps) {
 }
 #endif
 
+void app_car_on_1ms_tick(void) {
+    g_control_tick_div++;
+    if (g_control_tick_div >= 10U) {
+        g_control_tick_div = 0U;
+        if (g_control_due != 0U) {
+            g_control_overrun++;
+        } else {
+            g_control_due = 1U;
+        }
+    }
+}
+
+uint32_t app_car_get_control_overrun(void) { return g_control_overrun; }
+
+void app_car_run_scheduler(void) {
+    if (g_control_due != 0U) {
+        __disable_irq();
+        g_control_due = 0U;
+        __enable_irq();
+        app_car_run_10ms();
+    } else {
+        app_car_run_background();
+    }
+}
+
 // 整车初始化：初始化 PID、IMU、策略模块，并尝试从 Flash 读取地图
 void app_car_init(void) {
     // 1) 初始化循迹/速度 PID 参数（这里是默认参数，后续建议通过标定页在线调）
@@ -52,6 +86,15 @@ void app_car_init(void) {
 #if CAR_ENABLE_SPEED_PID
     speed_pid_init(&g_lspd_pid, 500.0f, 50.0f, 0.0f, CAR_CTRL_DT_S, 0.0f, CAR_MAX_PWM);
     speed_pid_init(&g_rspd_pid, 500.0f, 50.0f, 0.0f, CAR_CTRL_DT_S, 0.0f, CAR_MAX_PWM);
+#endif
+
+#if CAR_ENABLE_PID_SCOPE
+    pid_scope_init();
+    pid_scope_bind_line_pid(&g_line_pid);
+#if CAR_ENABLE_SPEED_PID
+    pid_scope_bind_left_speed_pid(&g_lspd_pid);
+    pid_scope_bind_right_speed_pid(&g_rspd_pid);
+#endif
 #endif
 
     // 2) 初始化 IMU 与策略模块；IMU 可通过开关关闭，便于先测循迹/电机。
@@ -83,6 +126,10 @@ void app_car_init(void) {
 
     // 4) 复位系统节拍
     g_tick_ms = 0U;
+    g_control_due = 0U;
+    g_control_tick_div = 0U;
+    g_control_overrun = 0U;
+    g_rt_valid = false;
 }
 
 // 10ms 主控制循环（建议由定时中断或高优先级任务稳定驱动）
@@ -207,26 +254,31 @@ void app_car_run_10ms(void) {
     cmd = safe_cmd;
 #endif
 
-    // ---------- G. 显示层：组装 OLED 调试字段 ----------
-    oled_runtime_t rt;
-    rt.page = 0U;
-    rt.line_raw = line_raw;
-    rt.line_bin = line_bin;
-    rt.line_err = line_err;
-    rt.left_pwm = cmd.left_pwm;
-    rt.right_pwm = cmd.right_pwm;
-    rt.left_speed = enc.left_speed_mps;
-    rt.right_speed = enc.right_speed_mps;
-    rt.distance_m = enc.distance_m;
-    rt.yaw_deg = imu.yaw_deg;
-    rt.segment_id = ev ? ev->id : 0xFFFFU;
-    rt.segment_type = ev ? ev->type : SEG_UNKNOWN;
-    rt.dist_to_next_event = next_ev ? (next_ev->start_dist_m - enc.distance_m) : -1.0f;
-    rt.current_limit_speed = so.target_speed_mps;
+    // ---------- G. 缓存后台调试数据 ----------
+    // OLED/PIDScope 属于慢任务，只缓存最新数据，后台空闲时再发送/刷新。
+    g_rt.page = 0U;
+    g_rt.line_raw = line_raw;
+    g_rt.line_bin = line_bin;
+    g_rt.line_err = line_err;
+    g_rt.left_pwm = cmd.left_pwm;
+    g_rt.right_pwm = cmd.right_pwm;
+    g_rt.left_speed = enc.left_speed_mps;
+    g_rt.right_speed = enc.right_speed_mps;
+    g_rt.distance_m = enc.distance_m;
+    g_rt.yaw_deg = imu.yaw_deg;
+    g_rt.segment_id = ev ? ev->id : 0xFFFFU;
+    g_rt.segment_type = ev ? ev->type : SEG_UNKNOWN;
+    g_rt.dist_to_next_event = next_ev ? (next_ev->start_dist_m - enc.distance_m) : -1.0f;
+    g_rt.current_limit_speed = so.target_speed_mps;
+    g_rt_valid = true;
+}
 
+void app_car_run_background(void) {
 #if CAR_ENABLE_OLED
-    bsp_oled_show_runtime(g_mode, &rt);
-#else
-    (void)rt;
+    if (g_rt_valid) bsp_oled_show_runtime(g_mode, &g_rt);
+#endif
+
+#if CAR_ENABLE_PID_SCOPE
+    pid_scope_poll_10ms();
 #endif
 }
