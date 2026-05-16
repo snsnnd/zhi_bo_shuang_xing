@@ -15,18 +15,22 @@
 // ------------------------- 全局控制对象 -------------------------
 // 循迹 PID：将 line_error 映射到转向量 steer
 static line_pid_t g_line_pid;
+#if CAR_ENABLE_SPEED_PID
 // 左/右轮速度 PID：将目标速度映射到 PWM
 static speed_pid_t g_lspd_pid;
 static speed_pid_t g_rspd_pid;
+#endif
 
 // 当前整车模式（学习/循迹/预测/丢线/保护等）
 static car_mode_t g_mode = CAR_MODE_IDLE;
 // 系统毫秒节拍（10ms 周期累加）
 static uint32_t g_tick_ms;
+#if CAR_ENABLE_TRACK_MAP_LEARNING
 // 第一圈地图学习上下文
 static map_learning_ctx_t g_learn_ctx;
 // 是否已完成学习（或已从 Flash 成功加载）
 static bool g_learning_done;
+#endif
 
 // 限幅工具函数：防止控制量越界
 static float clampf(float x, float lo, float hi) {
@@ -35,29 +39,47 @@ static float clampf(float x, float lo, float hi) {
     return x;
 }
 
+#if !CAR_ENABLE_SPEED_PID
+static float speed_to_open_loop_pwm(float target_mps) {
+    return clampf((target_mps / SPEED_HIGH_MPS) * CAR_MAX_PWM, CAR_MIN_PWM, CAR_MAX_PWM);
+}
+#endif
+
 // 整车初始化：初始化 PID、IMU、策略模块，并尝试从 Flash 读取地图
 void app_car_init(void) {
     // 1) 初始化循迹/速度 PID 参数（这里是默认参数，后续建议通过标定页在线调）
     line_pid_init(&g_line_pid, 120.0f, 0.0f, 25.0f, CAR_CTRL_DT_S, -350.0f, 350.0f);
+#if CAR_ENABLE_SPEED_PID
     speed_pid_init(&g_lspd_pid, 500.0f, 50.0f, 0.0f, CAR_CTRL_DT_S, 0.0f, CAR_MAX_PWM);
     speed_pid_init(&g_rspd_pid, 500.0f, 50.0f, 0.0f, CAR_CTRL_DT_S, 0.0f, CAR_MAX_PWM);
+#endif
 
-    // 2) 初始化 IMU 与策略模块
+    // 2) 初始化 IMU 与策略模块；IMU 可通过开关关闭，便于先测循迹/电机。
+#if CAR_ENABLE_IMU
     bsp_imu_init(CAR_CTRL_DT_S);
+#endif
     track_strategy_init();
 
-    // 3) 地图容器复位，然后尝试加载 Flash 中已学习的地图
+    // 3) 地图学习/Flash 都是高级功能，默认关闭，避免初期调车时写 Flash 或进入学习状态。
     track_map_reset();
+#if CAR_ENABLE_TRACK_MAP_LEARNING
     g_learning_done = false;
+#if CAR_ENABLE_TRACK_MAP_FLASH
     if (track_map_load_from_flash()) {
         // 加载成功：直接进入循迹/预测主流程，可跳过第一圈学习
         g_learning_done = true;
         g_mode = CAR_MODE_TRACKING;
     } else {
+#endif
         // 加载失败：进入学习模式，等待首圈自动打点
         track_map_learning_init(&g_learn_ctx, 0.0f, 0.0f);
         g_mode = CAR_MODE_LEARNING;
+#if CAR_ENABLE_TRACK_MAP_FLASH
     }
+#endif
+#else
+    g_mode = CAR_MODE_TRACKING;
+#endif
 
     // 4) 复位系统节拍
     g_tick_ms = 0U;
@@ -70,19 +92,35 @@ void app_car_run_10ms(void) {
     g_tick_ms += 10U;
 
     // ---------- A. 采样层：读取已滤波后的传感器状态 ----------
-    // 注意：bsp_line_get_raw() 返回的是经过 LPF 的值，不是裸 ADC
+    // 注意：bsp_line_get_raw() 返回的是经过 LPF 的值，不是裸 ADC。
+#if CAR_ENABLE_LINE_SENSOR
     line_raw_t line_raw = bsp_line_get_raw();
     // 二值判线状态（黑/白）用于状态机与急弯/丢线判定
     line_bin_t line_bin = bsp_line_get_bin();
     // 循迹误差（已轻度滤波）用于 line PID
     float line_err = bsp_line_get_error();
+#else
+    // 关闭循迹时假定车辆在线中央，便于单独测试 IMU/OLED/电机链路。
+    line_raw_t line_raw = { .l2 = 0.0f, .l1 = 1.0f, .r1 = 1.0f, .r2 = 0.0f };
+    line_bin_t line_bin = { .l2 = false, .l1 = true, .r1 = true, .r2 = false };
+    float line_err = 0.0f;
+#endif
     // IMU 当前姿态/角速度状态
+#if CAR_ENABLE_IMU
     imu_state_t imu = bsp_imu_get_state();
+#else
+    imu_state_t imu = {0};
+#endif
     // 编码器速度与里程（速度已滤波，里程直通）
+#if CAR_ENABLE_ENCODER
     encoder_state_t enc = bsp_encoder_get_state();
+#else
+    encoder_state_t enc = {0};
+#endif
 
     // ---------- B. 学习层：第一圈自动识别地图事件 ----------
     // 条件：仅在未学习完成时运行
+#if CAR_ENABLE_TRACK_MAP_LEARNING
     if (!g_learning_done) {
         // 持续喂给学习状态机：根据误差趋势 / yaw 变化 / 外侧触发自动识别路段
         (void)track_map_learning_step(&g_learn_ctx, enc.distance_m, imu.yaw_deg, line_err, line_bin, false);
@@ -92,14 +130,22 @@ void app_car_run_10ms(void) {
             // 强制收尾，确保最后一个路段也能落盘
             (void)track_map_learning_step(&g_learn_ctx, enc.distance_m, imu.yaw_deg, line_err, line_bin, true);
             // 保存到 Flash，供下次上电直接加载
+#if CAR_ENABLE_TRACK_MAP_FLASH
             (void)track_map_save_to_flash();
+#endif
             g_learning_done = true;
         }
     }
+#endif
 
     // ---------- C. 定位层：基于里程查询当前与下一事件 ----------
+#if CAR_ENABLE_MAP_PREDICTION
     const map_event_t *ev = track_map_find_current(enc.distance_m);
     const map_event_t *next_ev = track_map_find_next(enc.distance_m);
+#else
+    const map_event_t *ev = 0;
+    const map_event_t *next_ev = 0;
+#endif
 
     // ---------- D. 策略层：计算目标模式/速度/转向限幅 ----------
     strategy_output_t so = track_strategy_step(line_err, line_bin, imu, enc, g_tick_ms, ev);
@@ -129,8 +175,14 @@ void app_car_run_10ms(void) {
     }
 
     // 4) 左右轮速度闭环 -> PWM
+#if CAR_ENABLE_SPEED_PID
     float left_pwm = speed_pid_update(&g_lspd_pid, left_target, enc.left_speed_mps);
     float right_pwm = speed_pid_update(&g_rspd_pid, right_target, enc.right_speed_mps);
+#else
+    // 速度闭环未验证前，使用速度目标到 PWM 的简单前馈，降低调试复杂度。
+    float left_pwm = speed_to_open_loop_pwm(left_target);
+    float right_pwm = speed_to_open_loop_pwm(right_target);
+#endif
 
     // ---------- F. 执行层：输出电机命令 ----------
     motor_cmd_t cmd = {
@@ -146,7 +198,14 @@ void app_car_run_10ms(void) {
         cmd.right_pwm = 0.0f;
     }
 
+#if CAR_ENABLE_MOTOR_OUTPUT
     bsp_motor_set(cmd);
+#else
+    // 电机输出关闭时仍下发 0 PWM，保证切换阶段不会残留上一次命令。
+    motor_cmd_t safe_cmd = { .left_pwm = 0.0f, .right_pwm = 0.0f, .left_dir = true, .right_dir = true };
+    bsp_motor_set(safe_cmd);
+    cmd = safe_cmd;
+#endif
 
     // ---------- G. 显示层：组装 OLED 调试字段 ----------
     oled_runtime_t rt;
@@ -165,6 +224,9 @@ void app_car_run_10ms(void) {
     rt.dist_to_next_event = next_ev ? (next_ev->start_dist_m - enc.distance_m) : -1.0f;
     rt.current_limit_speed = so.target_speed_mps;
 
-    // 显示输出（当前 mock 用 printf；上板请替换为 SSD1306 绘图）
+#if CAR_ENABLE_OLED
     bsp_oled_show_runtime(g_mode, &rt);
+#else
+    (void)rt;
+#endif
 }

@@ -63,6 +63,33 @@
 
 所有核心控制参数集中在 `Common/car_config.h`：
 
+## 分阶段测试开关
+
+`Common/car_config.h` 顶部提供软件功能开关，`1U` 表示启用，`0U` 表示关闭。当前默认偏安全：传感器和 OLED 开启，电机输出、速度闭环、地图学习、Flash 地图、地图预测和丢线保护关闭。
+
+建议测试顺序：
+
+1. 只看数据：保持默认配置，确认循迹、IMU、编码器、OLED 数据正常。
+2. 测电机方向：设置 `CAR_ENABLE_MOTOR_OUTPUT=1U`，仍保持 `CAR_ENABLE_SPEED_PID=0U`，低速观察左右轮方向。
+3. 测速度闭环：设置 `CAR_ENABLE_SPEED_PID=1U`，确认编码器方向、轮径和脉冲数标定正确。
+4. 测丢线保护：设置 `CAR_ENABLE_LOST_PROTECTION=1U`，确认传感器黑白逻辑稳定后再启用。
+5. 测地图学习：设置 `CAR_ENABLE_TRACK_MAP_LEARNING=1U`，先不要开 Flash，观察学习到的路段是否合理。
+6. 测地图持久化：设置 `CAR_ENABLE_TRACK_MAP_FLASH=1U`，确认 Flash 地址不会和程序区冲突后再保存地图。
+7. 测预测调速：设置 `CAR_ENABLE_MAP_PREDICTION=1U`，让策略使用地图事件推荐速度。
+
+主要开关：
+
+- `CAR_ENABLE_LINE_SENSOR`：循迹采样。
+- `CAR_ENABLE_IMU`：MPU6050 姿态/角速度读取。
+- `CAR_ENABLE_ENCODER`：编码器速度/里程读取。
+- `CAR_ENABLE_OLED`：OLED 调试显示。
+- `CAR_ENABLE_MOTOR_OUTPUT`：真实电机输出，首次上电建议保持关闭。
+- `CAR_ENABLE_SPEED_PID`：左右轮速度闭环。
+- `CAR_ENABLE_TRACK_MAP_LEARNING`：第一圈地图学习。
+- `CAR_ENABLE_TRACK_MAP_FLASH`：地图 Flash 保存/加载。
+- `CAR_ENABLE_MAP_PREDICTION`：基于地图事件预测调速。
+- `CAR_ENABLE_LOST_PROTECTION`：丢线超时停车保护。
+
 - `CAR_CTRL_DT_S`：控制周期，当前为 10 ms。
 - `CAR_MAX_PWM`、`CAR_MIN_PWM`：PWM 输出限幅。
 - `LINE_WEIGHT_*`：四路循迹传感器权重，决定误差方向和大小。

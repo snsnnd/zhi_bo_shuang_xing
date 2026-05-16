@@ -1,6 +1,21 @@
 #ifndef CAR_CONFIG_H
 #define CAR_CONFIG_H
 
+/*
+ * 分阶段测试功能开关：1U=启用，0U=关闭。
+ * 建议顺序：先看传感器/OLED，再开电机，再开速度闭环，最后开地图学习/预测。
+ */
+#define CAR_ENABLE_LINE_SENSOR (1U)        // 循迹传感器采样开关
+#define CAR_ENABLE_IMU (1U)                // MPU6050 姿态/角速度读取开关
+#define CAR_ENABLE_ENCODER (1U)            // 编码器速度/里程读取开关
+#define CAR_ENABLE_OLED (1U)               // OLED 调试显示开关
+#define CAR_ENABLE_MOTOR_OUTPUT (0U)       // 电机真实输出开关；首次上电建议保持 0U
+#define CAR_ENABLE_SPEED_PID (0U)          // 左右轮速度闭环开关；不开时使用简单 PWM 前馈
+#define CAR_ENABLE_TRACK_MAP_LEARNING (0U) // 第一圈地图学习开关
+#define CAR_ENABLE_TRACK_MAP_FLASH (0U)    // 地图 Flash 保存/加载开关
+#define CAR_ENABLE_MAP_PREDICTION (0U)     // 使用地图事件做预测调速开关
+#define CAR_ENABLE_LOST_PROTECTION (0U)    // 丢线超时停车保护开关
+
 /* Control-loop timing and PWM limits. */
 #define CAR_CTRL_DT_S (0.01f) // 控制周期
 #define CAR_MAX_PWM (1000.0f) // 最大PWM
