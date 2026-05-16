@@ -4,15 +4,19 @@
 
 static encoder_state_t g_enc;
 static bool g_inited;
-static bool g_hw_started;
+static bool g_hw_started; // 底层硬件状态
 static uint16_t g_prev_lcnt;
 static uint16_t g_prev_rcnt;
 static uint32_t g_prev_tick;
 
+// 一阶低通滤波
 static float lpf(float prev, float in, float a) { return prev + a * (in - prev); }
 
-static void ensure_encoder_started(void) {
-    if (!g_hw_started) {
+// 判断编码器是否是第一次启动
+static void ensure_encoder_started(void)
+{
+    if (!g_hw_started) // 硬件是否启动
+    {
         (void)HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
         (void)HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
         g_prev_lcnt = (uint16_t)__HAL_TIM_GET_COUNTER(&htim2);
@@ -23,8 +27,10 @@ static void ensure_encoder_started(void) {
 }
 
 // 更新编码器状态：速度低通，累计距离直通（避免地图定位滞后）
-void bsp_encoder_set_state(float left_speed_mps, float right_speed_mps, float distance_m) {
-    if (!g_inited) {
+void bsp_encoder_set_state(float left_speed_mps, float right_speed_mps, float distance_m)
+{
+    if (!g_inited)
+    {
         g_enc.left_speed_mps = left_speed_mps;
         g_enc.right_speed_mps = right_speed_mps;
         g_inited = true;
@@ -34,12 +40,15 @@ void bsp_encoder_set_state(float left_speed_mps, float right_speed_mps, float di
     g_enc.distance_m = distance_m;
 }
 
-encoder_state_t bsp_encoder_get_state(void) {
+// 获取编码器状态
+encoder_state_t bsp_encoder_get_state(void)
+{
     ensure_encoder_started();
 
     uint32_t now = HAL_GetTick();
     uint32_t dt_ms = now - g_prev_tick;
-    if (dt_ms == 0U) return g_enc;
+    if (dt_ms == 0U)
+        return g_enc;
 
     uint16_t lcnt = (uint16_t)__HAL_TIM_GET_COUNTER(&htim2);
     uint16_t rcnt = (uint16_t)__HAL_TIM_GET_COUNTER(&htim3);
@@ -56,11 +65,14 @@ encoder_state_t bsp_encoder_get_state(void) {
     float left_speed = left_dist / dt_s;
     float right_speed = right_dist / dt_s;
 
-    if (!g_inited) {
+    if (!g_inited)
+    {
         g_enc.left_speed_mps = left_speed;
         g_enc.right_speed_mps = right_speed;
         g_inited = true;
-    } else {
+    }
+    else
+    {
         g_enc.left_speed_mps = lpf(g_enc.left_speed_mps, left_speed, ENC_SPD_LPF_ALPHA);
         g_enc.right_speed_mps = lpf(g_enc.right_speed_mps, right_speed, ENC_SPD_LPF_ALPHA);
     }

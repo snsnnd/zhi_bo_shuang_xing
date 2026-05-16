@@ -7,41 +7,60 @@
 static motor_cmd_t g_cmd;
 static bool g_pwm_started;
 
-static float clampf(float x, float lo, float hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
+// 比较最大/小幅度
+static float clampf(float x, float lo, float hi)
+{
+    if (x < lo)
+        return lo;
+    if (x > hi)
+        return hi;
     return x;
 }
 
-static void ensure_pwm_started(void) {
-    if (!g_pwm_started) {
+// 确保pwm启动
+static void ensure_pwm_started(void)
+{
+    if (!g_pwm_started)
+    {
         (void)HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
         (void)HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
         g_pwm_started = true;
     }
 }
 
-static uint32_t pwm_to_compare(float pwm) {
+// 输出限幅
+static uint32_t pwm_to_compare(float pwm)
+{
     float limited = clampf(pwm, CAR_MIN_PWM, CAR_MAX_PWM);
+
+    // 线性映射
     float period = (float)__HAL_TIM_GET_AUTORELOAD(&htim4);
     return (uint32_t)((limited / CAR_MAX_PWM) * period);
 }
 
-static void set_dir(GPIO_TypeDef *a_port, uint16_t a_pin, GPIO_TypeDef *b_port, uint16_t b_pin, bool forward, float pwm) {
-    if (pwm <= 0.0f) {
+// 设置电机转动方向
+static void set_dir(GPIO_TypeDef *a_port, uint16_t a_pin, GPIO_TypeDef *b_port, uint16_t b_pin, bool forward, float pwm)
+{
+    if (pwm <= 0.0f)
+    {
         HAL_GPIO_WritePin(a_port, a_pin, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(b_port, b_pin, GPIO_PIN_RESET);
-    } else if (forward) {
+    }
+    else if (forward)
+    {
         HAL_GPIO_WritePin(a_port, a_pin, GPIO_PIN_SET);
         HAL_GPIO_WritePin(b_port, b_pin, GPIO_PIN_RESET);
-    } else {
+    }
+    else
+    {
         HAL_GPIO_WritePin(a_port, a_pin, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(b_port, b_pin, GPIO_PIN_SET);
     }
 }
 
-// Store the latest differential-drive PWM and direction command.
-void bsp_motor_set(motor_cmd_t cmd) {
+// 设置电机转速
+void bsp_motor_set(motor_cmd_t cmd)
+{
     ensure_pwm_started();
     cmd.left_pwm = clampf(cmd.left_pwm, CAR_MIN_PWM, CAR_MAX_PWM);
     cmd.right_pwm = clampf(cmd.right_pwm, CAR_MIN_PWM, CAR_MAX_PWM);
