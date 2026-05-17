@@ -2,6 +2,9 @@
 
 #include "../Common/car_config.h"
 #include "../Common/runtime_config.h"
+#if CAR_ENABLE_PID_SCOPE
+#include "../Debug/PIDScope/pid_scope_adapter.h"
+#endif
 #include "main.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +68,33 @@ static remote_pid_target_t parse_pid_target(const char *s) {
     return REMOTE_PID_NONE;
 }
 
+static bool parse_motor_test_mode(const char *s, remote_motor_test_mode_t *mode) {
+    if (!s || !mode) return false;
+    if (strcmp(s, "LEFT") == 0 || strcmp(s, "L") == 0) *mode = REMOTE_MOTOR_TEST_LEFT;
+    else if (strcmp(s, "RIGHT") == 0 || strcmp(s, "R") == 0) *mode = REMOTE_MOTOR_TEST_RIGHT;
+    else if (strcmp(s, "BOTH") == 0 || strcmp(s, "ALL") == 0) *mode = REMOTE_MOTOR_TEST_BOTH;
+    else if (strcmp(s, "STOP") == 0 || strcmp(s, "OFF") == 0 || strcmp(s, "0") == 0) *mode = REMOTE_MOTOR_TEST_NONE;
+    else return false;
+    return true;
+}
+
+static bool parse_speed_tune_mode(const char *s, remote_speed_tune_mode_t *mode) {
+    if (!s || !mode) return false;
+    if (strcmp(s, "LEFT") == 0 || strcmp(s, "L") == 0) *mode = REMOTE_SPEED_TUNE_LEFT;
+    else if (strcmp(s, "RIGHT") == 0 || strcmp(s, "R") == 0) *mode = REMOTE_SPEED_TUNE_RIGHT;
+    else if (strcmp(s, "BOTH") == 0 || strcmp(s, "SPEED") == 0 || strcmp(s, "ALL") == 0) *mode = REMOTE_SPEED_TUNE_BOTH;
+    else if (strcmp(s, "STOP") == 0 || strcmp(s, "OFF") == 0 || strcmp(s, "0") == 0) *mode = REMOTE_SPEED_TUNE_NONE;
+    else return false;
+    return true;
+}
+
+static const char *speed_tune_mode_name(remote_speed_tune_mode_t mode) {
+    if (mode == REMOTE_SPEED_TUNE_LEFT) return "LEFT";
+    if (mode == REMOTE_SPEED_TUNE_RIGHT) return "RIGHT";
+    if (mode == REMOTE_SPEED_TUNE_BOTH) return "BOTH";
+    return "OFF";
+}
+
 static bool is_delim(char c) { return c == ' ' || c == ',' || c == '\t'; }
 
 static char *next_token(char **ctx) {
@@ -97,7 +127,7 @@ static void reply_status(void) {
 }
 
 static void reply_help(void) {
-    rc_reply("$HELP PING|START|STOP|AUTO|MOTOR 0/1|MODE <name>|SPEED <mps>|LIMIT <mps>|CFG ?|CFG LIST|CFG GET/ARM/SET <feature>|PID <target> <kp> <ki> <kd>|STATUS\r\n");
+    rc_reply("$HELP PING|START|STOP|AUTO|MOTOR 0/1|MOTORTEST LEFT/RIGHT/BOTH <pwm>|TUNE LEFT/RIGHT/BOTH <mps>|ENC?|SCOPE <dev> <ch>|SCOPE SPEED|SCOPE PERIOD <ms>|SCOPE RATE <hz>|MODE <name>|SPEED <mps>|LIMIT <mps>|CFG ?|CFG LIST|PID <target> <kp> <ki> <kd>|STATUS\r\n");
 }
 
 static void reply_config(void) {
@@ -244,11 +274,15 @@ static void parse_line(char *line) {
     } else if (strcmp(cmd, "STOP") == 0) {
         g_state.force_stop = true;
         g_state.motor_enable = false;
+        g_state.motor_test_mode = REMOTE_MOTOR_TEST_NONE;
+        g_state.speed_tune_mode = REMOTE_SPEED_TUNE_NONE;
+        g_state.motor_test_pwm = 0.0f;
         rc_reply("$OK,STOP\r\n");
     } else if (strcmp(cmd, "AUTO") == 0) {
         g_state.force_stop = false;
         g_state.speed_override = false;
         g_state.mode_override = false;
+        g_state.speed_tune_mode = REMOTE_SPEED_TUNE_NONE;
         rc_reply("$OK,AUTO\r\n");
     } else if (strcmp(cmd, "MOTOR") == 0) {
         char *arg = next_token(&ctx);
@@ -266,6 +300,7 @@ static void parse_line(char *line) {
             return;
         }
         set_target_speed((float)atof(arg));
+        g_state.speed_tune_mode = REMOTE_SPEED_TUNE_NONE;
         rc_reply("$OK,SPEED\r\n");
     } else if (strcmp(cmd, "LIMIT") == 0 || strcmp(cmd, "MAXSPEED") == 0) {
         char *arg = next_token(&ctx);
@@ -302,6 +337,125 @@ static void parse_line(char *line) {
         g_state.pid_update.kd = (float)atof(kd);
         g_state.pid_update.pending = true;
         rc_reply("$OK,PID\r\n");
+    } else if (strcmp(cmd, "MOTORTEST") == 0 || strcmp(cmd, "MTEST") == 0) {
+        char *mode_arg = next_token(&ctx);
+        char *pwm_arg = next_token(&ctx);
+        remote_motor_test_mode_t mode;
+        float pwm;
+        if (!mode_arg) {
+            rc_reply("$ERR,MOTORTEST_ARG\r\n");
+            return;
+        }
+        if (!parse_motor_test_mode(mode_arg, &mode)) {
+            rc_reply("$ERR,MOTORTEST_ARG\r\n");
+            return;
+        }
+        if (mode == REMOTE_MOTOR_TEST_NONE) {
+            g_state.motor_test_mode = REMOTE_MOTOR_TEST_NONE;
+            g_state.speed_tune_mode = REMOTE_SPEED_TUNE_NONE;
+            g_state.motor_test_pwm = 0.0f;
+            g_state.motor_enable = false;
+            g_state.force_stop = true;
+            rc_reply("$OK,MOTORTEST,STOP\r\n");
+            return;
+        }
+        if (!pwm_arg) {
+            rc_reply("$ERR,MOTORTEST_PWM\r\n");
+            return;
+        }
+        pwm = (float)atof(pwm_arg);
+        if (pwm < 0.0f) pwm = 0.0f;
+        if (pwm > CAR_MAX_PWM) pwm = CAR_MAX_PWM;
+        g_state.motor_test_mode = mode;
+        g_state.speed_tune_mode = REMOTE_SPEED_TUNE_NONE;
+        g_state.motor_test_pwm = pwm;
+        g_state.motor_enable = true;
+        g_state.force_stop = false;
+        rc_reply("$OK,MOTORTEST\r\n");
+    } else if (strcmp(cmd, "TUNE") == 0 || strcmp(cmd, "SPDTUNE") == 0) {
+        char *mode_arg = next_token(&ctx);
+        char *speed_arg = next_token(&ctx);
+        remote_speed_tune_mode_t tune_mode;
+        char buf[80];
+        if (!mode_arg || !parse_speed_tune_mode(mode_arg, &tune_mode)) {
+            rc_reply("$ERR,TUNE_ARG\r\n");
+            return;
+        }
+        if (tune_mode == REMOTE_SPEED_TUNE_NONE) {
+            g_state.speed_tune_mode = REMOTE_SPEED_TUNE_NONE;
+            g_state.speed_override = false;
+            rc_reply("$OK,TUNE,STOP\r\n");
+            return;
+        }
+        if (!speed_arg) {
+            rc_reply("$ERR,TUNE_SPEED\r\n");
+            return;
+        }
+        set_target_speed((float)atof(speed_arg));
+        g_state.speed_tune_mode = tune_mode;
+        g_state.motor_test_mode = REMOTE_MOTOR_TEST_NONE;
+        g_state.motor_enable = true;
+        g_state.force_stop = false;
+        snprintf(buf, sizeof(buf), "$OK,TUNE,%s,SPEED,%.3f\r\n", speed_tune_mode_name(g_state.speed_tune_mode), (double)g_state.target_speed_mps);
+        rc_reply(buf);
+    } else if (strcmp(cmd, "ENC?") == 0 || strcmp(cmd, "ENC") == 0) {
+        g_state.encoder_query_pending = true;
+        rc_reply("$OK,ENC,QUERY\r\n");
+    } else if (strcmp(cmd, "SCOPE") == 0 || strcmp(cmd, "PSCOPE") == 0) {
+        char *dev_arg = next_token(&ctx);
+        char *ch_arg = next_token(&ctx);
+        int dev;
+        int ch;
+        char buf[80];
+#if CAR_ENABLE_PID_SCOPE
+        if (dev_arg && strcmp(dev_arg, "PERIOD") == 0) {
+            uint32_t period_ms;
+            if (!ch_arg) {
+                rc_reply("$ERR,SCOPE_PERIOD_ARG\r\n");
+                return;
+            }
+            period_ms = (uint32_t)atoi(ch_arg);
+            pid_scope_set_send_period_ms(period_ms);
+            snprintf(buf, sizeof(buf), "$OK,SCOPE,PERIOD,%lu\r\n", (unsigned long)pid_scope_get_send_period_ms());
+            rc_reply(buf);
+            return;
+        }
+        if (dev_arg && strcmp(dev_arg, "RATE") == 0) {
+            uint32_t hz;
+            if (!ch_arg) {
+                rc_reply("$ERR,SCOPE_RATE_ARG\r\n");
+                return;
+            }
+            hz = (uint32_t)atoi(ch_arg);
+            if (hz == 0U) {
+                rc_reply("$ERR,SCOPE_RATE_RANGE\r\n");
+                return;
+            }
+            pid_scope_set_send_period_ms(1000U / hz);
+            snprintf(buf, sizeof(buf), "$OK,SCOPE,RATE,%lu,PERIOD,%lu\r\n", (unsigned long)hz, (unsigned long)pid_scope_get_send_period_ms());
+            rc_reply(buf);
+            return;
+        }
+        if (dev_arg && (strcmp(dev_arg, "SPEED") == 0 || strcmp(dev_arg, "BOTH") == 0 || strcmp(dev_arg, "ALL") == 0)) {
+            g_state.scope_device_id = PID_SCOPE_DEVICE_ID;
+            g_state.scope_channel_id = PID_SCOPE_CH_SPEED_BOTH;
+            rc_reply("$OK,SCOPE,SPEED,DEV,1,CH,254\r\n");
+            return;
+        }
+#endif
+        if (!dev_arg || !ch_arg) {
+            rc_reply("$ERR,SCOPE_ARG\r\n");
+            return;
+        }
+        dev = atoi(dev_arg);
+        ch = atoi(ch_arg);
+        if (dev < 0 || dev > 255 || ch < 0 || ch > 255) {
+            rc_reply("$ERR,SCOPE_RANGE\r\n");
+            return;
+        }
+        g_state.scope_device_id = (uint8_t)dev;
+        g_state.scope_channel_id = (uint8_t)ch;
+        rc_reply("$OK,SCOPE\r\n");
     } else if (strcmp(cmd, "STATUS") == 0 || strcmp(cmd, "STATUS?") == 0) {
         reply_status();
     } else if (strcmp(cmd, "CFG") == 0 || strcmp(cmd, "CONFIG") == 0) {
@@ -319,6 +473,8 @@ void remote_control_init(const remote_control_port_t *port) {
     g_state.speed_limit_mps = SPEED_HIGH_MPS;
     g_state.mode = CAR_MODE_TRACKING;
     g_state.timeout_ms = REMOTE_CONTROL_TIMEOUT_MS;
+    g_state.scope_device_id = PID_SCOPE_DEVICE_ID;
+    g_state.scope_channel_id = PID_SCOPE_CH_SPEED_LEFT;
     g_len = 0U;
     g_collecting = false;
 }
@@ -367,3 +523,10 @@ void remote_control_poll(void) {
 remote_control_state_t remote_control_get_state(void) { return g_state; }
 
 void remote_control_clear_pid_update(void) { g_state.pid_update.pending = false; }
+
+void remote_control_reply_encoder(float left_speed_mps, float right_speed_mps, float distance_m) {
+    char buf[96];
+    g_state.encoder_query_pending = false;
+    snprintf(buf, sizeof(buf), "$ENC,L,%.4f,R,%.4f,D,%.4f\r\n", (double)left_speed_mps, (double)right_speed_mps, (double)distance_m);
+    rc_reply(buf);
+}

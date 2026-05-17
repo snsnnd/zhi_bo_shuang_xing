@@ -66,6 +66,27 @@ static void speed_pid_observe_open_loop(speed_pid_t *pid, float target, float fe
     pid->last_d_term = 0.0f;
 }
 
+static float speed_pid_update_with_feedforward(speed_pid_t *pid, float target, float feedback) {
+    float pid_out = speed_pid_update(pid, target, feedback);
+    float ff = (target > 0.0f) ? (0.55f * speed_to_open_loop_pwm(target)) : 0.0f;
+    float out = clampf(pid_out + ff, CAR_MIN_PWM, CAR_MAX_PWM);
+    pid->last_output = out;
+    return out;
+}
+
+#if CAR_ENABLE_PID_SCOPE
+enum {
+    PID_STATUS_MOTOR_ENABLE = 1U << 0,
+    PID_STATUS_MOTOR_OUTPUT = 1U << 1,
+    PID_STATUS_SPEED_PID = 1U << 2,
+    PID_STATUS_TUNE = 1U << 3,
+    PID_STATUS_OUTPUT_SAT = 1U << 4,
+    PID_STATUS_PROTECT = 1U << 5,
+    PID_STATUS_LOST = 1U << 6,
+    PID_STATUS_MAP_PREDICTION = 1U << 7
+};
+#endif
+
 #if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
 static void apply_remote_pid_update(const remote_pid_update_t *u) {
     if (!u || !u->pending) return;
@@ -239,6 +260,10 @@ void app_car_run_10ms(void) {
     remote_control_state_t rc = remote_control_get_state();
     if (runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL)) {
         apply_remote_pid_update(&rc.pid_update);
+        if (rc.encoder_query_pending) remote_control_reply_encoder(enc.left_speed_mps, enc.right_speed_mps, enc.distance_m);
+#if CAR_ENABLE_PID_SCOPE
+        pid_scope_set_selected_channel(rc.scope_device_id, rc.scope_channel_id);
+#endif
         if (rc.mode_override) g_mode = rc.mode;
         if (rc.speed_override) so.target_speed_mps = rc.target_speed_mps;
         if (rc.speed_limit_override) so.target_speed_mps = clampf(so.target_speed_mps, 0.0f, rc.speed_limit_mps);
@@ -255,6 +280,15 @@ void app_car_run_10ms(void) {
     // 2) 将转向量分配到左右轮目标速度（差速转向）
     float left_target = so.target_speed_mps - 0.0015f * steer;
     float right_target = so.target_speed_mps + 0.0015f * steer;
+
+#if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
+    if (runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL) && rc.speed_tune_mode != REMOTE_SPEED_TUNE_NONE) {
+        left_target = 0.0f;
+        right_target = 0.0f;
+        if (rc.speed_tune_mode == REMOTE_SPEED_TUNE_LEFT || rc.speed_tune_mode == REMOTE_SPEED_TUNE_BOTH) left_target = rc.target_speed_mps;
+        if (rc.speed_tune_mode == REMOTE_SPEED_TUNE_RIGHT || rc.speed_tune_mode == REMOTE_SPEED_TUNE_BOTH) right_target = rc.target_speed_mps;
+    }
+#endif
 
     // 3) 模式特化控制
     if (g_mode == CAR_MODE_LOST) {
@@ -273,8 +307,8 @@ void app_car_run_10ms(void) {
     float left_pwm;
     float right_pwm;
     if (runtime_feature_enabled(RC_FEATURE_SPEED_PID)) {
-        left_pwm = speed_pid_update(&g_lspd_pid, left_target, enc.left_speed_mps);
-        right_pwm = speed_pid_update(&g_rspd_pid, right_target, enc.right_speed_mps);
+        left_pwm = speed_pid_update_with_feedforward(&g_lspd_pid, left_target, enc.left_speed_mps);
+        right_pwm = speed_pid_update_with_feedforward(&g_rspd_pid, right_target, enc.right_speed_mps);
     } else {
     // 速度闭环未验证前，使用速度目标到 PWM 的简单前馈，降低调试复杂度。
         left_pwm = speed_to_open_loop_pwm(left_target);
@@ -297,6 +331,19 @@ void app_car_run_10ms(void) {
         cmd.right_pwm = 0.0f;
     }
 
+#if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
+    if (runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL) && rc.motor_test_mode != REMOTE_MOTOR_TEST_NONE) {
+        cmd.left_pwm = 0.0f;
+        cmd.right_pwm = 0.0f;
+        cmd.left_dir = true;
+        cmd.right_dir = true;
+        if (rc.motor_test_mode == REMOTE_MOTOR_TEST_LEFT || rc.motor_test_mode == REMOTE_MOTOR_TEST_BOTH) cmd.left_pwm = rc.motor_test_pwm;
+        if (rc.motor_test_mode == REMOTE_MOTOR_TEST_RIGHT || rc.motor_test_mode == REMOTE_MOTOR_TEST_BOTH) cmd.right_pwm = rc.motor_test_pwm;
+        speed_pid_observe_open_loop(&g_lspd_pid, 0.0f, enc.left_speed_mps, cmd.left_pwm);
+        speed_pid_observe_open_loop(&g_rspd_pid, 0.0f, enc.right_speed_mps, cmd.right_pwm);
+    }
+#endif
+
     if (runtime_feature_enabled(RC_FEATURE_MOTOR_OUTPUT)) {
 #if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
         if (!runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL) || (rc.motor_enable && !rc.force_stop)) {
@@ -315,6 +362,27 @@ void app_car_run_10ms(void) {
     bsp_motor_set(safe_cmd);
     cmd = safe_cmd;
     }
+
+#if CAR_ENABLE_PID_SCOPE
+    uint16_t pid_status = 0U;
+    if (runtime_feature_enabled(RC_FEATURE_MOTOR_OUTPUT)) pid_status |= PID_STATUS_MOTOR_OUTPUT;
+    if (runtime_feature_enabled(RC_FEATURE_SPEED_PID)) pid_status |= PID_STATUS_SPEED_PID;
+    if (runtime_feature_enabled(RC_FEATURE_MAP_PREDICTION)) pid_status |= PID_STATUS_MAP_PREDICTION;
+    if (g_mode == CAR_MODE_PROTECT) pid_status |= PID_STATUS_PROTECT;
+    if (g_mode == CAR_MODE_LOST) pid_status |= PID_STATUS_LOST;
+    if (cmd.left_pwm >= (CAR_MAX_PWM - 1.0f) || cmd.right_pwm >= (CAR_MAX_PWM - 1.0f)) pid_status |= PID_STATUS_OUTPUT_SAT;
+#if CAR_ENABLE_REMOTE_CONTROL && CAR_ENABLE_HC05
+    if (runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL) && rc.motor_enable) pid_status |= PID_STATUS_MOTOR_ENABLE;
+    if (runtime_feature_enabled(RC_FEATURE_REMOTE_CONTROL) && rc.speed_tune_mode != REMOTE_SPEED_TUNE_NONE) pid_status |= PID_STATUS_TUNE;
+#endif
+    pid_scope_set_vehicle_state(enc.distance_m, imu.yaw_deg, pid_status);
+    pid_scope_set_map_state(ev ? ev->id : 0xFFFFU,
+                            ev ? (uint8_t)ev->type : (uint8_t)SEG_UNKNOWN,
+                            next_ev ? next_ev->id : 0xFFFFU,
+                            next_ev ? (uint8_t)next_ev->type : (uint8_t)SEG_UNKNOWN,
+                            next_ev ? (next_ev->start_dist_m - enc.distance_m) : -1.0f,
+                            (uint8_t)g_mode);
+#endif
 
     // ---------- G. 缓存后台调试数据 ----------
     // OLED/PIDScope 属于慢任务，只缓存最新数据，后台空闲时再发送/刷新。

@@ -50,13 +50,23 @@ encoder_state_t bsp_encoder_get_state(void)
     if (dt_ms == 0U)
         return g_enc;
 
-    uint16_t lcnt = (uint16_t)__HAL_TIM_GET_COUNTER(&htim2);
-    uint16_t rcnt = (uint16_t)__HAL_TIM_GET_COUNTER(&htim3);
-    int16_t ldelta = (int16_t)(lcnt - g_prev_lcnt);
-    int16_t rdelta = (int16_t)(rcnt - g_prev_rcnt);
-    g_prev_lcnt = lcnt;
-    g_prev_rcnt = rcnt;
+    uint16_t tim2_cnt = (uint16_t)__HAL_TIM_GET_COUNTER(&htim2);
+    uint16_t tim3_cnt = (uint16_t)__HAL_TIM_GET_COUNTER(&htim3);
+    int16_t tim2_delta = (int16_t)(tim2_cnt - g_prev_lcnt);
+    int16_t tim3_delta = (int16_t)(tim3_cnt - g_prev_rcnt);
+    g_prev_lcnt = tim2_cnt;
+    g_prev_rcnt = tim3_cnt;
     g_prev_tick = now;
+
+#if ENCODER_SWAP_LEFT_RIGHT
+    int16_t ldelta = tim3_delta;
+    int16_t rdelta = tim2_delta;
+#else
+    int16_t ldelta = tim2_delta;
+    int16_t rdelta = tim3_delta;
+#endif
+    ldelta = (int16_t)(ldelta * ENCODER_LEFT_SIGN);
+    rdelta = (int16_t)(rdelta * ENCODER_RIGHT_SIGN);
 
     float dt_s = (float)dt_ms * 0.001f;
     float wheel_circ_m = WHEEL_DIAMETER_M * 3.1415926f;

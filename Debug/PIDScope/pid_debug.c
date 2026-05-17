@@ -134,6 +134,34 @@ int pid_debug_send_event(uint8_t device_id, uint8_t channel_id, uint16_t event_c
     return send_frame(PID_FRAME_EVENT, device_id, channel_id, payload, sizeof(payload));
 }
 
+int pid_debug_send_heartbeat(uint8_t device_id, uint16_t status_flags, uint32_t uptime_ms) {
+    uint8_t payload[6];
+    put_u32_le(&payload[0], uptime_ms);
+    put_u16_le(&payload[4], status_flags);
+    return send_frame(PID_FRAME_HEARTBEAT, device_id, 0U, payload, sizeof(payload));
+}
+
+int pid_debug_send_map_status(uint8_t device_id, uint32_t uptime_ms,
+                              float distance_m, float yaw_deg,
+                              uint16_t current_id, uint8_t current_type,
+                              uint16_t next_id, uint8_t next_type,
+                              float dist_to_next_m, uint8_t car_mode,
+                              uint16_t status_flags) {
+    uint8_t payload[24];
+    uint16_t offset = 0U;
+    put_u32_le(&payload[offset], uptime_ms); offset = (uint16_t)(offset + 4U);
+    put_float_le(&payload[offset], distance_m); offset = (uint16_t)(offset + 4U);
+    put_float_le(&payload[offset], yaw_deg); offset = (uint16_t)(offset + 4U);
+    put_u16_le(&payload[offset], current_id); offset = (uint16_t)(offset + 2U);
+    payload[offset++] = current_type;
+    put_u16_le(&payload[offset], next_id); offset = (uint16_t)(offset + 2U);
+    payload[offset++] = next_type;
+    put_float_le(&payload[offset], dist_to_next_m); offset = (uint16_t)(offset + 4U);
+    payload[offset++] = car_mode;
+    put_u16_le(&payload[offset], status_flags); offset = (uint16_t)(offset + 2U);
+    return send_frame(PID_FRAME_MAP_STATUS, device_id, 0U, payload, offset);
+}
+
 void pid_debug_poll(void) {
     if (g_port.write == 0) return;
     uint8_t *ptr;

@@ -25,7 +25,10 @@
 #define PID_SCOPE_CH_LINE (0U)             // 通道0：循迹转向 PID
 #define PID_SCOPE_CH_SPEED_LEFT (1U)       // 通道1：左轮速度 PID
 #define PID_SCOPE_CH_SPEED_RIGHT (2U)      // 通道2：右轮速度 PID
-#define PID_SCOPE_SEND_PERIOD_MS (500U)    // 9600 波特率下三通道遥测约 2Hz，给 CMD 回复和心跳留带宽
+#define PID_SCOPE_CH_SPEED_BOTH (254U)     // 虚拟通道：左右轮速度轮询发送
+#define PID_SCOPE_SEND_PERIOD_MS (150U)    // 默认遥测周期；9600 波特率下约 6Hz，兼顾波形刷新和 CMD 回复
+#define PID_SCOPE_SEND_PERIOD_MIN_MS (10U) // 运行期最小遥测周期；高波特率/有线串口可调低
+#define PID_SCOPE_SEND_PERIOD_MAX_MS (1000U) // 运行期最大遥测周期
 
 #define HC05_DEFAULT_BAUD (9600U)          // 常见 HC-05 数据模式默认波特率
 #define HC05_AT_BAUD (38400U)              // 常见 HC-05 AT 模式默认波特率
@@ -94,6 +97,10 @@
 #define ENCODER_QUAD_FACTOR (4.0f)       // STM32 编码器四倍频
 #define ENCODER_COUNTS_PER_REV (ENCODER_HALL_PPR * ENCODER_GEAR_RATIO * ENCODER_QUAD_FACTOR) // 输出轴每圈总脉冲数：2112
 #define WHEEL_DIAMETER_M (0.065f)        // 车轮直径 m
+#define MOTOR_SWAP_LEFT_RIGHT (0U)       // 左右电机交换标定：1U 在 BSP 层交换左右输出
+#define ENCODER_SWAP_LEFT_RIGHT (0U)     // 左右编码器交换标定：1U 在 BSP 层交换左右反馈
+#define ENCODER_LEFT_SIGN (-1)           // 左电机正转实测编码器为负，软件反相为正速度
+#define ENCODER_RIGHT_SIGN (1)           // 右编码器方向标定；若右轮正转为负则改为 -1
 
 #define MPU6050_I2C_ADDR (0x68U << 1)
 #define MPU6050_GYRO_CALIB_SAMPLES (100U) // 校准采样次数，100U 代表 100 次

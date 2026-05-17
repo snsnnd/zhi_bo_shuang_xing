@@ -57,6 +57,10 @@ $STATUS,MOTOR,0,STOP,1,SPEED,0.000,LIMIT,0.250,MODE,3
 | `STOP` | 无 | 禁止电机并强制停车 | `$OK,STOP` |
 | `AUTO` | 无 | 取消速度覆盖和模式覆盖，恢复自动策略 | `$OK,AUTO` |
 | `MOTOR` | `0/1`、`ON/OFF`、`ENABLE` | 禁止或允许电机输出 | `$OK,MOTOR,0/1` |
+| `MOTORTEST` | `LEFT/RIGHT/BOTH <pwm>` | 架空单轮/双轮开环 PWM 自检 | `$OK,MOTORTEST` |
+| `MOTORTEST` | `STOP` | 停止电机自检 | `$OK,MOTORTEST,STOP` |
+| `ENC?` | 无 | 查询当前编码器速度和里程缓存 | `$OK,ENC,QUERY` 后 `$ENC,...` |
+| `SCOPE` | `<device> <channel>` | 选择 PIDScope 遥测通道，只发送当前通道 | `$OK,SCOPE` |
 | `SPEED` | `<mps>` | 覆盖目标速度，单位 m/s | `$OK,SPEED` |
 | `LIMIT` | `<mps>` | 设置运行时速度上限 | `$OK,LIMIT` |
 | `MAXSPEED` | `<mps>` | `LIMIT` 的别名 | `$OK,LIMIT` |
@@ -211,6 +215,52 @@ AUTO
 
 建议实车测试顺序：`PING`、`STATUS`、`MOTOR 0`、`SPEED 0.10`、确认车辆架空、`CFG ARM MOTOR_OUTPUT`、`CFG SET MOTOR_OUTPUT 1`、`MOTOR 1`、`START`。
 
+## 硬件自检
+
+电机自检用于确认左右电机 PWM、方向和编码器反馈是否接线正确。测试前必须架空车辆，并先打开运行期电机输出开关：
+
+```text
+CFG ARM MOTOR_OUTPUT
+CFG SET MOTOR_OUTPUT 1
+```
+
+单轮或双轮开环 PWM 测试：
+
+```text
+MOTORTEST LEFT 200
+MOTORTEST RIGHT 200
+MOTORTEST BOTH 200
+```
+
+停止自检：
+
+```text
+MOTORTEST STOP
+```
+
+查询编码器当前速度和累计里程：
+
+```text
+ENC?
+```
+
+回复示例：
+
+```text
+$OK,ENC,QUERY
+$ENC,L,0.1023,R,0.0987,D,0.0150
+```
+
+说明：
+
+- `MOTORTEST` 会绕过策略和 PID，直接给指定车轮输出 PWM。
+- `MOTORTEST` 仍受 `MOTOR_OUTPUT` 运行期开关保护；未执行 `CFG ARM MOTOR_OUTPUT` 和 `CFG SET MOTOR_OUTPUT 1` 时不会真实输出。
+- `STOP` 命令也会退出电机自检。
+- `D` 是编码器累计里程 `distance_m`，单位 m；编码器方向反了时会累计为负数。
+- 如果左轮测试时右轮转，后续需要调整 `MOTOR_SWAP_LEFT_RIGHT` 或实际接线。
+- 如果正转速度为负，调整 `ENCODER_LEFT_SIGN` 或 `ENCODER_RIGHT_SIGN`。
+- 如果车轮转但 `ENC?` 对应侧速度始终为 0，优先检查编码器接线、TIM2/TIM3 映射和 `ENCODER_SWAP_LEFT_RIGHT`。
+
 ## PID 在线调参
 
 命令格式：
@@ -231,6 +281,9 @@ PID <target> <kp> <ki> <kd>
 ```text
 PID LINE 120 0 25
 PID SPEED 500 50 0
+SCOPE 1 0
+SCOPE 1 1
+SCOPE 1 2
 ```
 
 说明：
@@ -238,6 +291,7 @@ PID SPEED 500 50 0
 - PID 命令只修改 RAM 中的运行参数，掉电不保存。
 - 修改 PID 后会清空对应 PID 的积分和历史状态，避免旧状态造成冲击。
 - 当前 `CAR_ENABLE_SPEED_PID=0U` 时，速度 PID 参数可被解析，但速度闭环未启用，不会影响输出。
+- `SCOPE 1 0` 只发送循迹 PID 波形，`SCOPE 1 1` 只发送左轮速度 PID，`SCOPE 1 2` 只发送右轮速度 PID；上位机切换波形页时会自动发送。
 
 ## 常见问题
 

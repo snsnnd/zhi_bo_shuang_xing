@@ -66,11 +66,19 @@ void bsp_motor_set(motor_cmd_t cmd)
     cmd.right_pwm = clampf(cmd.right_pwm, CAR_MIN_PWM, CAR_MAX_PWM);
     g_cmd = cmd;
 
+#if MOTOR_SWAP_LEFT_RIGHT
+    // 实车 A/B 左右与商家参考相反：逻辑左轮输出到 B，逻辑右轮输出到 A。
+    set_dir(GPIOB, GPIO_PIN_15, GPIOB, GPIO_PIN_14, cmd.right_dir, cmd.right_pwm);
+    set_dir(GPIOB, GPIO_PIN_12, GPIOB, GPIO_PIN_13, cmd.left_dir, cmd.left_pwm);
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, pwm_to_compare(cmd.right_pwm));
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, pwm_to_compare(cmd.left_pwm));
+#else
     // TB6612 seller reference: A(left)=PB9/TIM4_CH4 + PB14/PB15, B(right)=PB8/TIM4_CH3 + PB13/PB12.
     set_dir(GPIOB, GPIO_PIN_15, GPIOB, GPIO_PIN_14, cmd.left_dir, cmd.left_pwm);
     set_dir(GPIOB, GPIO_PIN_12, GPIOB, GPIO_PIN_13, cmd.right_dir, cmd.right_pwm);
     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, pwm_to_compare(cmd.left_pwm));
     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, pwm_to_compare(cmd.right_pwm));
+#endif
 }
 
 // Return the last command for debug display or unit-level simulation checks.

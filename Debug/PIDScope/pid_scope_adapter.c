@@ -12,6 +12,21 @@ static line_pid_t *g_line_pid;
 static speed_pid_t *g_left_speed_pid;
 static speed_pid_t *g_right_speed_pid;
 static uint32_t g_last_send_ms;
+static uint32_t g_last_heartbeat_ms;
+static uint32_t g_last_map_status_ms;
+static uint32_t g_send_period_ms = PID_SCOPE_SEND_PERIOD_MS;
+static uint8_t g_selected_device_id = PID_SCOPE_DEVICE_ID;
+static uint8_t g_selected_channel_id = PID_SCOPE_CH_SPEED_LEFT;
+static uint8_t g_speed_both_next_channel = PID_SCOPE_CH_SPEED_LEFT;
+static float g_vehicle_distance_m;
+static float g_vehicle_yaw_deg;
+static uint16_t g_vehicle_status_flags;
+static uint16_t g_current_map_id = 0xFFFFU;
+static uint8_t g_current_map_type;
+static uint16_t g_next_map_id = 0xFFFFU;
+static uint8_t g_next_map_type;
+static float g_dist_to_next_m = -1.0f;
+static uint8_t g_car_mode;
 
 __weak int pid_scope_port_write(const uint8_t *data, uint16_t len) {
 #if CAR_ENABLE_PID_SCOPE_OVER_HC05
@@ -90,6 +105,9 @@ static void send_line_telemetry(void) {
     t.p_term = g_line_pid->last_p_term;
     t.i_term = g_line_pid->last_i_term;
     t.d_term = g_line_pid->last_d_term;
+    t.extra1 = g_vehicle_distance_m;
+    t.extra2 = g_vehicle_yaw_deg;
+    t.status_flags = g_vehicle_status_flags;
     (void)pid_debug_send_telemetry(PID_SCOPE_DEVICE_ID, PID_SCOPE_CH_LINE, &t);
 }
 
@@ -105,6 +123,9 @@ static void send_speed_telemetry(uint8_t channel_id, const speed_pid_t *pid) {
     t.p_term = pid->last_p_term;
     t.i_term = pid->last_i_term;
     t.d_term = pid->last_d_term;
+    t.extra1 = g_vehicle_distance_m;
+    t.extra2 = g_vehicle_yaw_deg;
+    t.status_flags = g_vehicle_status_flags;
     (void)pid_debug_send_telemetry(PID_SCOPE_DEVICE_ID, channel_id, &t);
 }
 
@@ -137,13 +158,67 @@ void pid_scope_bind_right_speed_pid(speed_pid_t *pid) {
     }
 }
 
+void pid_scope_set_selected_channel(uint8_t device_id, uint8_t channel_id) {
+    g_selected_device_id = device_id;
+    g_selected_channel_id = channel_id;
+}
+
+void pid_scope_set_send_period_ms(uint32_t period_ms) {
+    if (period_ms < PID_SCOPE_SEND_PERIOD_MIN_MS) period_ms = PID_SCOPE_SEND_PERIOD_MIN_MS;
+    if (period_ms > PID_SCOPE_SEND_PERIOD_MAX_MS) period_ms = PID_SCOPE_SEND_PERIOD_MAX_MS;
+    g_send_period_ms = period_ms;
+}
+
+uint32_t pid_scope_get_send_period_ms(void) { return g_send_period_ms; }
+
+void pid_scope_set_vehicle_state(float distance_m, float yaw_deg, uint16_t status_flags) {
+    g_vehicle_distance_m = distance_m;
+    g_vehicle_yaw_deg = yaw_deg;
+    g_vehicle_status_flags = status_flags;
+}
+
+void pid_scope_set_map_state(uint16_t current_id, uint8_t current_type,
+                             uint16_t next_id, uint8_t next_type,
+                             float dist_to_next_m, uint8_t car_mode) {
+    g_current_map_id = current_id;
+    g_current_map_type = current_type;
+    g_next_map_id = next_id;
+    g_next_map_type = next_type;
+    g_dist_to_next_m = dist_to_next_m;
+    g_car_mode = car_mode;
+}
+
 void pid_scope_poll_10ms(void) {
     uint32_t now = HAL_GetTick();
-    if ((now - g_last_send_ms) >= PID_SCOPE_SEND_PERIOD_MS) {
+    if ((now - g_last_heartbeat_ms) >= 1000U) {
+        g_last_heartbeat_ms = now;
+        (void)pid_debug_send_heartbeat(PID_SCOPE_DEVICE_ID, g_vehicle_status_flags, now);
+    }
+    if ((now - g_last_map_status_ms) >= 500U) {
+        g_last_map_status_ms = now;
+        (void)pid_debug_send_map_status(PID_SCOPE_DEVICE_ID, now,
+                                        g_vehicle_distance_m, g_vehicle_yaw_deg,
+                                        g_current_map_id, g_current_map_type,
+                                        g_next_map_id, g_next_map_type,
+                                        g_dist_to_next_m, g_car_mode,
+                                        g_vehicle_status_flags);
+    }
+    if ((now - g_last_send_ms) >= g_send_period_ms) {
         g_last_send_ms = now;
-        send_line_telemetry();
-        send_speed_telemetry(PID_SCOPE_CH_SPEED_LEFT, g_left_speed_pid);
-        send_speed_telemetry(PID_SCOPE_CH_SPEED_RIGHT, g_right_speed_pid);
+        if (g_selected_device_id == PID_SCOPE_DEVICE_ID) {
+            if (g_selected_channel_id == PID_SCOPE_CH_LINE) send_line_telemetry();
+            else if (g_selected_channel_id == PID_SCOPE_CH_SPEED_LEFT) send_speed_telemetry(PID_SCOPE_CH_SPEED_LEFT, g_left_speed_pid);
+            else if (g_selected_channel_id == PID_SCOPE_CH_SPEED_RIGHT) send_speed_telemetry(PID_SCOPE_CH_SPEED_RIGHT, g_right_speed_pid);
+            else if (g_selected_channel_id == PID_SCOPE_CH_SPEED_BOTH) {
+                if (g_speed_both_next_channel == PID_SCOPE_CH_SPEED_LEFT) {
+                    send_speed_telemetry(PID_SCOPE_CH_SPEED_LEFT, g_left_speed_pid);
+                    g_speed_both_next_channel = PID_SCOPE_CH_SPEED_RIGHT;
+                } else {
+                    send_speed_telemetry(PID_SCOPE_CH_SPEED_RIGHT, g_right_speed_pid);
+                    g_speed_both_next_channel = PID_SCOPE_CH_SPEED_LEFT;
+                }
+            }
+        }
     }
     pid_debug_poll();
 }

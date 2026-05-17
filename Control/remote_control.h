@@ -21,6 +21,20 @@ typedef enum {
     REMOTE_PID_SPEED_BOTH
 } remote_pid_target_t;
 
+typedef enum {
+    REMOTE_MOTOR_TEST_NONE = 0,
+    REMOTE_MOTOR_TEST_LEFT,
+    REMOTE_MOTOR_TEST_RIGHT,
+    REMOTE_MOTOR_TEST_BOTH
+} remote_motor_test_mode_t;
+
+typedef enum {
+    REMOTE_SPEED_TUNE_NONE = 0,
+    REMOTE_SPEED_TUNE_LEFT,
+    REMOTE_SPEED_TUNE_RIGHT,
+    REMOTE_SPEED_TUNE_BOTH
+} remote_speed_tune_mode_t;
+
 typedef struct {
     remote_pid_target_t target;
     float kp;
@@ -39,6 +53,12 @@ typedef struct {
     float speed_limit_mps;
     car_mode_t mode;
     remote_pid_update_t pid_update;
+    remote_motor_test_mode_t motor_test_mode;
+    remote_speed_tune_mode_t speed_tune_mode;
+    float motor_test_pwm;
+    bool encoder_query_pending;
+    uint8_t scope_device_id;
+    uint8_t scope_channel_id;
     uint32_t last_cmd_ms;
     uint32_t timeout_ms;
 } remote_control_state_t;
@@ -53,6 +73,7 @@ void remote_control_rx_byte(uint8_t byte);
 void remote_control_poll(void);
 remote_control_state_t remote_control_get_state(void);
 void remote_control_clear_pid_update(void);
+void remote_control_reply_encoder(float left_speed_mps, float right_speed_mps, float distance_m);
 
 #ifdef __cplusplus
 }
